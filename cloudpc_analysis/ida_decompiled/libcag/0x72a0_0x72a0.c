@@ -1,0 +1,5 @@
+// 0x72a0 @ 0x72a0
+void xor_with_key()
+{
+  ; /*0x72a0*/
+}

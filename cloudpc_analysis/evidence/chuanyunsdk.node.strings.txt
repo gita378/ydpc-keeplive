@@ -1,0 +1,20 @@
+****************  connectCallback
+connect callback function code:
+disconnect
+connect
+restart callback function code:
+restart
+disconnect callback function code:
+vmCIP:
+cagIP:
+cagPort:
+********************** do connect **********************/n
+connectDesktop
+Get Func ConnectDesktop Failed
+connectDesktop ret val:
+restartDesktop
+Get Func RestartDesktop Failed
+restartDesktop ret val:
+disconnectDesktop
+Get Func DisconnectDesktop Failed
+disconnectDesktop ret val:

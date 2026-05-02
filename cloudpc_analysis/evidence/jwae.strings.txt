@@ -1,0 +1,80 @@
+auth
+connectiH1
+auth_levH1
+auth_serH1
+auth_serH1
+auth_serH1
+?auth
+trunk_seH1
+connectiH1
+auth
+connectI
+auth
+auth
+No trunkI
+fig/jwaeH
+jwae/conL
+jwae_outH
+jwae_outH
+jwae_outI
+jwae_outI
+auth
+jwae_outH
+jwae
+jwae.cerH
+jwae.keyI
+jwae.cmhH
+jwae/conH
+jwae/conH
+auth
+authA
+connectH
+id tokenH
+trunk_inH1
+is_trunkH9
+auth
+connectiI
+connectiI
+connectiI
+connectiH
+connectiH1
+connectiH1
+connectiH1
+yIcE
+Auth
+AuthentiL1
+max_tcp_session_max_udp_session__rule_cache_sizemax_rule_cache_sg_stream_disconnlong_stream_disccally_disconnectperiodically_disonnection_periodcheck_connectionn_method
+choose_connectionew_connection_pconnection_pool_riod
+disconnecting_peuest_mapping_urlrequest_mapping_listen_agent_addr
+/modify_trunktim/modify_loglevel_csv
+/trunk_switch_meBroadBandManagerCloudBroadBandMat_config_version/get_config_verst_verdicts_table/get_verdicts_tadify_retrans_csv/modify_retrans_/get_config_info/get_chuanyun_info
+_connection_sizeall_connection_srecv_ack_pkt_ratrecv_gbn_pkt_ratcloud_peripheralts_last_data_sents_last_data_recv
+, max threads = , trunk_mode is send stream sid io_send pkt len check stats exitretrans_send_rtt last recv time  duration_since sessions insert sessions remove handdle sucess [dial tx is none., worker_choice:occur an error: Too many headerschannel is full.reset xe stream[for tcp or udp, , local_addr is stream_options (deserialize jsondispatcher sess ,send to channelsocket bind ERR invalid domain: ] from table tbcnew_stream vmid:"<redacted>" trunk mode [local_addr err: ]: remove cidr [! The desIP is [extinfos_len is invalid read_dst add_aac_stream recv trunk_head remote time out drop trunk conn-struct TrunkInfoProfileIsRunningredirect_ip_protauth token is : LocalForceSwitchrequest canceledclient tx closedts_last_ack_recvdownstream_statsanother_side_gbn bytes remainingRead chunk startParameterManagerRetransCsvConfigWriteRetransDatapool is disabledlazy state wrongupdate!!!!!!!!!!
+must be in range remaining_slice poll_read emptyCYError: timeoutconnection down.wake_all_reader chuanyun::streamchuanyun::commonassertion `left  right` failed: ) when slicing `range end index max size reachedAlready ReportedMultiple ChoicesPayment RequiredUpgrade Requiredcontent-encodingcontent-languagecontent-locationwww-authenticatex-xss-protectionInvalidAuthorityAuthorityMissingcontent-length (chunked encodingconnection errorBodyWriteAbortedUnexpectedHeaderallow_half_close
+East_Asian_WidthlowercasemappingNFKC_Quick_CheckNFKD_Quick_CheckOther_AlphabeticscriptextensionssentenceterminaltitlecasemappingunifiedideographuppercasemappingclosepunctuationDash_PunctuationfinalpunctuationLowercase_LetterTitlecase_LetterUppercase_LetterOpen_PunctuationotherpunctuationImperial_AramaicMeroitic_CursiveZanabazar_Square
+case_insensitive] io send Ping: ] io send Pong: handle mack ack cur left index: batch_recv_num: Rwlock use time nack_ts_vec len error occurred: ] decrypt cost: ] data_tx cost: KeepaliveSettingheartbeat_period] io send cost: struct TransInfo] encrypt cost: XEError: timeoutstruct RXOWDStatConnectionClosedDgramTypeInvalidSCHandshakeError{invalid syntax}InvalidCrlNumbersignature_alg_idverification_algCertReqExtension
+" when expecting Resuming sessionKeyUpdateRequestUnknownExtensionSessionTicketAckCertificateChainCertificateEntryServerEcdhParamsCertificateTls13NewSessionTicketChangeCipherSpecPeerIncompatibleInvalidKeyUpdateAlertDescriptionDecryptionFailedHandshakeFailureIllegalParameterMissingExtensionUnrecognisedNameRSA_PKCS1_SHA256RSA_PKCS1_SHA384RSA_PKCS1_SHA512AcceptedFinishedfloating point `entity not foundconnection resethost unreachableno storage spaceinvalid filename             at PermissionDeniedAddrNotAvailableinvalid argument.debug_types.dwoEOF on self-pipesignal too largesemaphore closed
+sseq gbn destrsv1rsv2timealseheadtailvmidAuthIpv4Ipv6rolenextWireWifiAutobindalpnspecauthrateport io jwaeSlimMask to     httpGonedateetagfromhostlinkvaryPOSTHEAD <= PortBodyFullUserInitIdleBusySizecallhashHash
+AuthInfousernamepasswordTLSErrorProtobufExplicitdtls_cfgmetadataResponsepriv_keyTrunkSYN server reason: , break;session  for now error: RunTask  while [loglevelremoved  , break invaild, this: , port: , sess:  success(stream-] after recv bufhk sent Dest ip  members sender
+, right  too old get fd src_addrdst_addrUnDialed invalid,server=ExtInfossend_seqsend_lenpkt_typeTrunkGbnrecv_fpsrtt_meanowd_meanis_trunksub_typenow_timeprotocolreserved, load: , hi is , lo is ThreadIdflushed
+AssignedExtenderextenderhexdigitID_StartocommentxidstartebasegazarmenianArmenianBalinesebalinesebassavahBopomofobopomofoBuginesebugineseCherokeecherokeecyrillicCyrillicDuployanduployanEthiopicethiopicGeorgiangeorgiangujaratiGujaratigurmukhiGurmukhiHiraganahiraganaJavanesejavaneseKayah_LiKatakanakatakanaTai_ThamLinear_ALinear_BmahajaniMahajaniOl_ChikiPhags_PaTagbanwatagbanwaTai_VietTifinaghtifinaghUgariticugariticVithkuqivithkuqi
+get seq , left:  remote SslErrorextern "min_bitslifetimefinishedexporterGot HRR  expect AcceptedKeyShareHostNameidentityFinishedgot_typeDTLSv1_0DTLSv1_2DTLSv1_3NoKeyLogDisabledRejected missingIpv4AddrIpv6Addra stringsequence column , line: SockAddrNulErrorDirEntrydeadlockNotFoundTimedOutDeadlock
+/root/.cargo/registry/src/index.crates.io-1949****557f/prefix-trie-0.2.5/src/map/iter.rs/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-1.37.0/src/io/util/buf_reader.rs/root/.cargo/registry/src/index.crates.io-1949****557f/futures-util-0.3.30/src/future/select_ok.rsMaybeDone polled after value taken/root/.cargo/registry/src/index.crates.io-1949****557f/futures-util-0.3.30/src/future/maybe_done.rsfuture still here when droppingunexpected polling after handshake/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-rustls-0.26.0/src/common/handshake.rsUnable to allocate another span/root/.cargo/registry/src/index.crates.io-1949****557f/tracing-subscriber-0.3.18/src/reload.rs/root/.cargo/registry/src/index.crates.io-1949****557f/prometheus-0.11.0/src/vec.rsassertion failed: prev/root/.cargo/registry/src/index.crates.io-1949****557f/futures-util-0.3.30/src/stream/futures_unordered/mod.rs/root/.cargo/registry/src/index.crates.io-1949****557f/prefix-trie-0.2.5/src/map/mod.rsSpan not found, this is a bug[tracing-subscriber] Unable to format the following event, ignoring: /root/.cargo/registry/src/index.crates.io-1949****557f/tracing-subscriber-0.3.18/src/fmt/fmt_layer.rsnewtime.busytime.idleenter[tracing-subscriber] Unable to write an event to the Writer for this Subscriber! Error:
+Unable to format the following event. Name: ; Fields: [tracing-subscriber] Unable to write an "event formatting error" to the Writer for this Subscriber! Error: inconsistent in dropassertion failed: !ret.inner.is_empty()/root/.cargo/registry/src/index.crates.io-1949****557f/futures-util-0.3.30/src/future/select_all.rs/root/.cargo/registry/src/index.crates.io-1949****557f/sharded-slab-0.1.7/src/page/mod.rspage must have been allocated to insert!Thread count overflowed the configured max count. Thread index = a shard can only be inserted by the thread that owns it, this is a bug!tls handshake alerttls handshake eof/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-openssl-0.6.5/src/lib.rs/root/.cargo/registry/src/index.crates.io-1949****557f/serde_json-1.0.117/src/value/de.rs
+struct WriteRetransData with 4 elements/root/.cargo/registry/src/index.crates.io-1949****557f/tracing-subscriber-0.3.18/src/fmt/mod.rsUnable to install global subscriber<unknown time>ignoring ``: assertion failed: self.replace(val).is_none()/root/.cargo/registry/src/index.crates.io-1949****557f/tracing-subscriber-0.3.18/src/registry/extensions.rsfailed to spawn `tracing-appender` non-blocking worker thread/root/.cargo/git/checkouts/tracing-appender-localtime-8f0a****802f/21eee12/src/worker.rsGet localtime offset failed/root/.cargo/registry/src/index.crates.io-1949****557f/csv-1.3.0/src/writer.rs/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sync/mpmc/mod.rs/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sync/mpmc/array.rs/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sync/mpmc/context.rscannot transmute_copy if Dst is larger than Srccannot sample empty range/root/.cargo/registry/src/index.crates.io-1949****557f/rand-0.8.5/src/rng.rshk is server ack: hk_auth: auth failed : 112.17.28.221xe new errorDtls handshake error: got new dtls stream, ssl version: , ciphersuite: , ssl keying_material_buf: Occurred an error when processing the dtls handshake: dtls errorOccurred the timeout event when processing the dtls handshake: handshake with fd fd is  nettype is handshake_with_fd socket local addr udp_connected_socket socket io is  local addr rsxe handshakes with udp_connected_socket err
+XEInfoTransInfoStreamInfoTrunkBackupFrameCtrlInfoCldPeriphStatsTrunkStreamInfoProxyStatGet username: <redacted> passwd: Auth type is , not support now.not yet implemented/root/.cargo/registry/src/index.crates.io-1949****557f/rand-0.8.5/src/seq/mod.rsSetLoggerErrorCoreId/root/.cargo/registry/src/index.crates.io-1949****557f/hyper-0.14.28/src/body/aggregate.rs/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-1.37.0/src/io/util/read_until.rs/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-1.37.0/src/io/split.rs/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-1.37.0/src/sync/semaphore.rs/root/.cargo/registry/src/index.crates.io-1949****557f/byteorder-1.5.0/src/lib.rsVersionInvalidAlreadyRegInconsistentCardinalityMsgcauseRTTStatRXOWDStatCurrentCOUNTERGAUGESUMMARYUNTYPEDHISTOGRAMinvalid utf-8ErrorCodeis_serversender_default_slidwnd_sizereceiver_default_slidwnd_sizekeepalive_settingrate_settingwrite_csvcathread_numBuilderAttributesvaluesparentPendingSslDropping CCSrustls::conn/root/.cargo/registry/src/index.crates.io-1949****557f/rustls-0.23.8/src/conn.rsreceived plaintext buffer fullstatusheadersDTLSConfigservice_certintermediate_certsSkipServerVerificationcert_rejection_errortls12_signature_errortls13_signature_errorsignature_schemes
+assertion failed: !data.is_null()/root/.cargo/registry/src/index.crates.io-1949****557f/openssl-0.10.68/src/ssl/bio.rsSYNServerACKClientAckTrunkServerACKtrunk_flagtrunk_modeHandshakeHeaderHandshakeFrameRefearly_data
+_count_bucketinvalid dnsnameget_tls_client_stream success.get_tls_client_stream sucessget_tls_client_stream faild get_tls_client_stream timeout faild reader exit recv io exitsend exit send io exitstream exit recv noneget subtype error no cipher infoget_tls_server_stream success.get_tls_server_stream faild get_tls_server_stream timeout faild chuanyun  flush io err  shutdown io err report_desktop_status_tx is nonenew chuanyun conn fd chuanyun handshake faile err chuanyun TLS handshake faile err streaam exit check exitcheck_stats exit fd check exitsocket_recv start buf len  bytes_type , bytes_remaining Error occured while read_exact, recv_len does not equal read_exact len
+conn close ,exit io_sendtime_out time is conn  close ,exit check_statsInitErrorsource/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-1.37.0/src/io/util/write_all.rs/root/.cargo/registry/src/index.crates.io-1949****557f/tokio-rustls-0.26.0/src/common/mod.rs/root/.cargo/registry/src/index.crates.io-1949****557f/futures-util-0.3.30/src/future/join_all.rslocal_timerecognize_nack_tsrecv_retransmit_tsmrc_1st_nack_sendlast_nack_sendnext_nack_tsstart write_ts_to_csvwrite_ts_send_tx  is closed.write time  mswriter flush error, file size  M, file time past  minutes !rename output to history_file error, write csv failed, start sender_ts_to_csvretrans_ts_send_tx is closed.messages len local_nowrecv_tssend_tssend_ts_rttfirst_nack_tsfirst_nack_rttret_putinto_qtlp_tsrto_tsretransmit_tsretransmit_send_tsretransmit_timeis_timeoutnack_timescore/src/common/dispatcher.rs timeout time  for timeoutsession size reached session_size[].CloudBroadBandManager] [] Dial test failedget dial result error pick route sess  outbound[] handler not found, get_connection_stat: tag: Both main and bak connection is 0, use direct.directoutbound direct handler not foundclientdispatch tcp failed, no stream on handlerget_redirect ip and port is Noneconnect_stream_outbound error: , stream_subtype ] [failed] [dispatch stream failedtcp link close  <->  done, transfered [ [handler not found] [failed]
+dial address send to master error, core/src/common/frame_rate_ctrl_server.rsframe ctrl Failed to shutdown : get frame ctrl vmid connect.frame ctrl listen, get vmid.frame ctrl error: get vmid error.get frame ctrl connect,get vmid.frame ctrl listen,vmid len errorframe ctrl listen,vmid len 8frame ctrl listen,vmid len 4vmid:  "<redacted>" existed with value: Failed to shutdown vmid: "<redacted>" shutdown existed TcpStream for vmid: "<redacted>" ctrl listen accepted connection from: , vmid:"<redacted>" ctrl listen accept vmid:  "<redacted>" have!frame ctrl error: frame ctrl listen, get frame ctrl open.Successfully read  bytes of FrameCtrlOpen_packet data.Failed to read additional data: framectrlopen data:Received '0',framectrl close.frame ctrl listen, get unknown infotype.frame ctrl vmid_packet error,buffer_len: frame ctrl error:frame ctrl listen accept err: task hashmap size , remove vmid:"<redacted>" err:task TcpStream  is closedtask Failed to shutdown TcpStream: task Data received: task read from TcpStream nodata: task Failed to get peer address: task sockaddr: received_stats len: task remove vmid:"<redacted>" std_stream:hashmap_task size , insert vmid:"<redacted>" for vmid: "<redacted>" found in vmid_hashmap_all, tasklen:, all len:send net_info, Write net_stat succeeded for vmid:"<redacted>" net_info Write failed: ,vmid:"<redacted>" size  .remove_closed_streams VmidHashMap vmid = "<redacted>" VmidHashMap Peer address: VmidHashMap TcpStream VmidHashMap Failed to shutdown TcpStream: VmidHashMap Data received: VmidHashMap read from TcpStream nodata: VmidHashMap Failed to get peer address: VmidHashMap sockaddr: frame_rate_ctrl_server_listen_on: framectrl core_id:
+chuanyun - aac - get trunk info receiver noneunexpected channel type occured:
+no xe_info not exists in trunk chuanyun conn_info is not found under trunk modeaac conn_info is not found under trunk modewas notifiedmonitor_server errorPort  is available is unavailablemonitor_server listing on: monitor_server_listen_on: retrans_ref: Arc<RwLock<RetransCsvConfig>> Failed to bind to any port in the range handle client connection success.runtime error, handle incoming error Unsuport Methodno headerscontent_length parse error content_length to str error headers do not have content_lengtherror data, , buf, content_length Invalid HTTP requesthttp request incompletehttp request read err
+get_aac_info: get all aac connection info.
+curl 127.0.0.1:12001/get_aac_info    get_chuanyun_info: get all chaunyun connection info.
+curl 127.0.0.1:12001/get_chuanyun_info    get_trunk_info: get all trunk connection info.
+curl 127.0.0.1:12001/get_trunk_info    memstat: get jwae memstat.
+get_config_info: get jwae config info.
+curl 127.0.0.1:12001/modify_loglevel --data '{"loglevel": "trace,hyper=info,jwae=debug,rsxe=debug,mio=debug"}'    modify_trunktime: data = holdtime timeout period.
+curl 127.0.0.1:12001/modify_trunktime --data '{"holdtime": 10,"timeout":300,"period":100}'    get_verdicts_table: get all router verdict cases.
+curl 127.0.0.1:12001/get_dial_nums     trunk_switch_member: switch trunk backup mode master sender.
+curl http://127.0.0.1:12001/trunk_switch_member     get single dial result.

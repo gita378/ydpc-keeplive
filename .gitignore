@@ -1,0 +1,33 @@
+# 官方客户端 (太大)
+移动云电脑.app/
+cloudpc_extract/
+
+# IDA 目标和数据库
+ida_targets/
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
+# 抓包
+*.pcap
+
+# 日志
+keepalive_logs/
+*.log
+
+# macOS
+.DS_Store
+.tool-versions
+
+# Python
+__pycache__/
+*.pyc
+
+# 临时文件
+/tmp/
+*.core
+*.lock

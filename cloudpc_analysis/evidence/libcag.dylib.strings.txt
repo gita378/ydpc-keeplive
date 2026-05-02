@@ -1,0 +1,36 @@
+cag.log
+cag-bakup.log
+connectToGateWay
+connect_to_access_gateway
+connect_to_access_gateway_opentelemetry
+cag_dest_ip_print
+start send connect info destAddr is %s (%s:%d) to cag...
+CONNECT [%s]:%d HTTP/1.1
+Proxy-Connection: keep-alive
+Proxy-Authorization: Basic %s
+CONNECT %s:%d HTTP/1.1
+Proxy-Connection: keep-alive
+Proxy-Authorization: Basic %s
+CONNECT [%s]:%d HTTP/1.1
+Proxy-Connection: keep-alive
+CONNECT %s:%d HTTP/1.1
+Proxy-Connection: keep-alive
+200 Connection established
+response is not 200 Connection established! and %s
+cag_param_valid_check
+ERROR: cag param is nul!
+ERROR: invalid authentication type %u
+auth type is %s
+ERROR: send client key to cag failed(%d)
+send client key to cag success
+recv server key from cag success, key = %u, aes_flag = %d
+ERROR: recv server key from cag failed
+send_access_gateway_connect_info
+start send connect info to cag...
+ERROR: send connect info to cag failed(%d)
+send connect info to cag success
+recv cag reply %d
+ERROR: connect to cag failed
+connect to cag success
+../log/cag.log
+../log/cag-bakup.log
