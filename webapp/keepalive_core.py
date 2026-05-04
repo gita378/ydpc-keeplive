@@ -298,15 +298,23 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
         )
 
 
-def keepalive_account(username: str, password: str, hold: int = 10, timeout: int = 10) -> list:
-    """对一个账号下所有云电脑做保活，返回结果列表"""
+def keepalive_account(username: str, password: str, hold: int = 10, timeout: int = 10) -> tuple:
+    """对一个账号下所有云电脑做保活，返回 (results, fresh_vms)
+    fresh_vms 是保活后重新拉取的最新 VM 列表（含 vmStatusShow/remainDurationTime）
+    """
     results = []
+    fresh_vms = []
     try:
         client = soho_login(username, password, timeout=timeout)
         vms = fetch_vm_list(client)
         for vm in vms:
             r = keepalive_single_vm(client, vm, hold=hold, timeout=timeout)
             results.append(r)
+        # 保活完成后重新拉一次列表，刷新状态和剩余时长
+        try:
+            fresh_vms = fetch_vm_list(client)
+        except Exception:
+            fresh_vms = vms
     except Exception as e:
         results.append(KeepaliveResult(vm_name="LOGIN", user_service_id=0, success=False, error=str(e)))
-    return results
+    return results, fresh_vms

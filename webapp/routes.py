@@ -277,10 +277,22 @@ def keepalive_now(aid):
             return jsonify({"success": False, "msg": "账号不存在"}), 404
         return redirect(url_for("main.index"))
 
-    results = keepalive_account(account["username"], account["password"],
-                                hold=current_app.config.get("HOLD_SECONDS", 10))
+    results, fresh_vms = keepalive_account(account["username"], account["password"],
+                                           hold=current_app.config.get("HOLD_SECONDS", 10))
     now = datetime.now().isoformat()
     status = "success" if all(r.success for r in results) else "failed"
+    # 刷新 VM 状态
+    if fresh_vms:
+        for vm in fresh_vms:
+            usid = int(vm.get("userServiceId", 0))
+            db.execute(
+                "UPDATE cloud_vm SET vm_status=?, remain_duration_time=?, raw_json=? "
+                "WHERE account_id=? AND user_service_id=?",
+                (vm.get("vmStatusShow", ""),
+                 str(vm.get("remainDurationTime", "")) if vm.get("remainDurationTime") is not None else None,
+                 json.dumps(vm, ensure_ascii=False),
+                 aid, usid),
+            )
     for r in results:
         db.execute(
             "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, error_message) "

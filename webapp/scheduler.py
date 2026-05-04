@@ -11,9 +11,9 @@ scheduler = BackgroundScheduler(daemon=True, job_defaults={"coalesce": True, "ma
 
 
 def _run_keepalive(account_id: int, username: str, password: str, db_path: str, hold: int = 10):
-    """后台任务：执行保活并写日志到数据库"""
+    """后台任务：执行保活并写日志 + 刷新 VM 状态到数据库"""
     LOG.info("[%s] 执行保活", username)
-    results = keepalive_account(username, password, hold=hold)
+    results, fresh_vms = keepalive_account(username, password, hold=hold)
     now = datetime.now().isoformat()
     status_summary = "success" if all(r.success for r in results) else "failed"
 
@@ -30,6 +30,19 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
             "UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",
             (now, status_summary, account_id),
         )
+        # 刷新 VM 状态和剩余时长
+        if fresh_vms:
+            import json
+            for vm in fresh_vms:
+                usid = int(vm.get("userServiceId", 0))
+                conn.execute(
+                    "UPDATE cloud_vm SET vm_status=?, remain_duration_time=?, raw_json=? "
+                    "WHERE account_id=? AND user_service_id=?",
+                    (vm.get("vmStatusShow", ""),
+                     str(vm.get("remainDurationTime", "")) if vm.get("remainDurationTime") is not None else None,
+                     json.dumps(vm, ensure_ascii=False),
+                     account_id, usid),
+                )
         conn.commit()
     finally:
         conn.close()
