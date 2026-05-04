@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS keepalive_log (
     user_service_id INTEGER,
     status TEXT NOT NULL,
     cag_reply_code INTEGER,
+    vm_status TEXT,
+    remain_duration_time TEXT,
     error_message TEXT,
     executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

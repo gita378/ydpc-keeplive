@@ -293,11 +293,18 @@ def keepalive_now(aid):
                  json.dumps(vm, ensure_ascii=False),
                  aid, usid),
             )
+    vm_map = {int(vm.get("userServiceId", 0)): vm for vm in fresh_vms} if fresh_vms else {}
     for r in results:
+        vm_info = vm_map.get(r.user_service_id, {})
+        remain = vm_info.get("remainDurationTime")
         db.execute(
-            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, error_message) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (aid, r.vm_name, r.user_service_id, "success" if r.success else "failed", r.cag_code, r.error or None),
+            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
+            "vm_status, remain_duration_time, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (aid, r.vm_name, r.user_service_id, "success" if r.success else "failed", r.cag_code,
+             vm_info.get("vmStatusShow", ""),
+             str(remain) if remain is not None else None,
+             r.error or None),
         )
     db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
     db.commit()

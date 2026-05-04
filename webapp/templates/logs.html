@@ -5,7 +5,7 @@
     <div class="table-responsive">
         <table class="table table-sm table-hover mb-0">
             <thead class="table-light">
-                <tr><th>时间</th><th>账号</th><th>云电脑</th><th>状态</th><th>CAG</th><th>错误</th></tr>
+                <tr><th>时间</th><th>账号</th><th>云电脑</th><th>保活</th><th>CAG</th><th>VM状态</th><th>剩余时长</th><th>错误</th></tr>
             </thead>
             <tbody>
             {% for l in logs %}
@@ -15,11 +15,27 @@
                     <td>{{ l.vm_name }}</td>
                     <td>{{ '✅' if l.status == 'success' else '❌' }}</td>
                     <td>{{ l.cag_reply_code or '' }}</td>
+                    <td>
+                        {% if l.vm_status == '运行中' %}
+                        <span class="badge bg-success">运行中</span>
+                        {% elif l.vm_status == '已关机' %}
+                        <span class="badge bg-secondary">已关机</span>
+                        {% elif l.vm_status %}
+                        <span class="badge bg-warning">{{ l.vm_status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not l.remain_duration_time or l.remain_duration_time == 'None' or l.remain_duration_time == '' %}
+                        {% if l.vm_status %}<span class="text-success">无限</span>{% endif %}
+                        {% else %}
+                        {{ (l.remain_duration_time|int / 3600)|round(1) }}h
+                        {% endif %}
+                    </td>
                     <td><small>{{ l.error_message or '' }}</small></td>
                 </tr>
             {% endfor %}
             {% if not logs %}
-                <tr><td colspan="6" class="text-center text-muted py-3">暂无日志</td></tr>
+                <tr><td colspan="8" class="text-center text-muted py-3">暂无日志</td></tr>
             {% endif %}
             </tbody>
         </table>
