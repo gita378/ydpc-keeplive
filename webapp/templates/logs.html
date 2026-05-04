@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h4 class="mb-3">执行日志（最近 100 条）</h4>
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+                <tr><th>时间</th><th>账号</th><th>云电脑</th><th>状态</th><th>CAG</th><th>错误</th></tr>
+            </thead>
+            <tbody>
+            {% for l in logs %}
+                <tr class="{{ 'table-danger' if l.status != 'success' else '' }}">
+                    <td><small>{{ l.executed_at[:19] if l.executed_at else '' }}</small></td>
+                    <td>{{ l.username }}</td>
+                    <td>{{ l.vm_name }}</td>
+                    <td>{{ '✅' if l.status == 'success' else '❌' }}</td>
+                    <td>{{ l.cag_reply_code or '' }}</td>
+                    <td><small>{{ l.error_message or '' }}</small></td>
+                </tr>
+            {% endfor %}
+            {% if not logs %}
+                <tr><td colspan="6" class="text-center text-muted py-3">暂无日志</td></tr>
+            {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

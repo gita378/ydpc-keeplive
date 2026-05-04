@@ -31,3 +31,6 @@ __pycache__/
 /tmp/
 *.core
 *.lock
+webapp/cloudpc.db
+webapp/cloudpc.db-shm
+webapp/cloudpc.db-wal

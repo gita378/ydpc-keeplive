@@ -47,8 +47,7 @@ from cryptography.hazmat.backends import default_backend
 # ═══════════════════════════════════════════════════════════════════════════════
 
 ACCOUNTS = [
-    {"username": "zhaoboy",  "password": "ZXCzxc199692*"},
-    {"username": "zhaoboy2", "password": "ZXCzxc199692*"},
+  
     {"username": "zhaoboy3", "password": "ZXCzxc199692*"},
 ]
 
@@ -353,14 +352,14 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    lock_path = Path("/tmp/cloudpc_keepalive_multi.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_path.open("a+")
-    try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        LOG.warning("上一轮还在跑，跳过")
-        return
+    # lock_path = Path(f"/tmp/.lock")
+    # lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # lock_file = lock_path.open("a+")
+    # try:
+    #     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # except BlockingIOError:
+    #     LOG.warning("上一轮还在跑，跳过")
+    #     return
 
     try:
         LOG.info("===== 保活开始 (%d 个账号) =====", len(ACCOUNTS))

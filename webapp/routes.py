@@ -1,0 +1,309 @@
+import json
+from datetime import datetime
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
+from database import get_db
+from auth import login_required
+from keepalive_core import soho_login, fetch_vm_list, keepalive_account
+from scheduler import add_job, remove_job, reschedule_job
+
+main_bp = Blueprint("main", __name__)
+
+INTERVAL_OPTIONS = [
+    (600, "10 分钟"),
+    (1200, "20 分钟"),
+    (1680, "28 分钟 (推荐)"),
+    (3600, "1 小时"),
+    (21600, "6 小时"),
+    (43200, "12 小时"),
+]
+
+
+@main_bp.route("/")
+@login_required
+def index():
+    db = get_db()
+    sort = request.args.get("sort", "id")
+    order = request.args.get("order", "asc")
+    allowed_sorts = {
+        "username": "a.username",
+        "vm_count": "vm_count",
+        "keepalive": "a.keepalive_enabled",
+        "interval": "a.keepalive_interval",
+        "last": "a.last_keepalive_at",
+        "id": "a.id",
+    }
+    sort_col = allowed_sorts.get(sort, "a.id")
+    order_dir = "DESC" if order == "desc" else "ASC"
+    accounts = db.execute(
+        f"SELECT a.*, (SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id) as vm_count "
+        f"FROM cloud_account a ORDER BY {sort_col} {order_dir}"
+    ).fetchall()
+    return render_template("accounts.html", accounts=accounts, intervals=INTERVAL_OPTIONS,
+                           current_sort=sort, current_order=order)
+
+
+@main_bp.route("/accounts/add", methods=["POST"])
+@login_required
+def add_account():
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "").strip()
+    if not username or not password:
+        flash("账号和密码不能为空", "danger")
+        return redirect(url_for("main.index"))
+
+    db = get_db()
+    existing = db.execute("SELECT id FROM cloud_account WHERE username=?", (username,)).fetchone()
+    if existing:
+        flash(f"账号 {username} 已存在", "warning")
+        return redirect(url_for("main.index"))
+
+    # 尝试登录验证
+    try:
+        client = soho_login(username, password)
+        vms = fetch_vm_list(client)
+    except Exception as e:
+        flash(f"登录失败: {e}", "danger")
+        return redirect(url_for("main.index"))
+
+    # 写入数据库
+    cur = db.execute(
+        "INSERT INTO cloud_account (username, password, last_login_at) VALUES (?, ?, ?)",
+        (username, password, datetime.now().isoformat()),
+    )
+    account_id = cur.lastrowid
+
+    # 写入云电脑列表
+    for vm in vms:
+        db.execute(
+            "INSERT INTO cloud_vm (account_id, user_service_id, vm_name, spu_code, sku_name, "
+            "vm_status, remain_duration_time, cpu, memory, raw_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                account_id,
+                vm.get("userServiceId"),
+                vm.get("vmName"),
+                vm.get("spuCode"),
+                vm.get("skuName"),
+                vm.get("vmStatusShow"),
+                str(vm.get("remainDurationTime") or ""),
+                vm.get("cpu"),
+                vm.get("memory"),
+                json.dumps(vm, ensure_ascii=False),
+            ),
+        )
+    db.commit()
+    flash(f"添加成功: {username} ({len(vms)} 台云电脑)", "success")
+    return redirect(url_for("main.index"))
+
+
+@main_bp.route("/accounts/<int:aid>/delete", methods=["POST"])
+@login_required
+def delete_account(aid):
+    db = get_db()
+    remove_job(aid)
+    db.execute("DELETE FROM cloud_vm WHERE account_id=?", (aid,))
+    db.execute("DELETE FROM keepalive_log WHERE account_id=?", (aid,))
+    db.execute("DELETE FROM cloud_account WHERE id=?", (aid,))
+    db.commit()
+    flash("已删除", "success")
+    return redirect(url_for("main.index"))
+
+
+@main_bp.route("/accounts/<int:aid>")
+@login_required
+def account_detail(aid):
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    if not account:
+        flash("账号不存在", "danger")
+        return redirect(url_for("main.index"))
+    vms_raw = db.execute("SELECT * FROM cloud_vm WHERE account_id=? ORDER BY id", (aid,)).fetchall()
+    # 解析 raw_json 提取 skuSpecStr
+    vms = []
+    for vm in vms_raw:
+        vm_dict = dict(vm)
+        try:
+            raw = json.loads(vm["raw_json"]) if vm["raw_json"] else {}
+            vm_dict["sku_spec_str"] = raw.get("skuSpecStr", "")
+            vm_dict["spu_name"] = raw.get("spuName", "")
+        except Exception:
+            vm_dict["sku_spec_str"] = ""
+            vm_dict["spu_name"] = ""
+        vms.append(vm_dict)
+    logs = db.execute(
+        "SELECT * FROM keepalive_log WHERE account_id=? ORDER BY executed_at DESC LIMIT 20", (aid,)
+    ).fetchall()
+    return render_template("account_detail.html", account=account, vms=vms, logs=logs, intervals=INTERVAL_OPTIONS)
+
+
+@main_bp.route("/accounts/<int:aid>/edit", methods=["POST"])
+@login_required
+def edit_account(aid):
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    if not account:
+        flash("账号不存在", "danger")
+        return redirect(url_for("main.index"))
+    new_username = request.form.get("username", "").strip()
+    new_password = request.form.get("password", "").strip()
+    if not new_username or not new_password:
+        flash("账号和密码不能为空", "danger")
+        return redirect(url_for("main.index"))
+    # 验证新密码能登录
+    try:
+        client = soho_login(new_username, new_password)
+    except Exception as e:
+        flash(f"验证失败（请确认账号密码正确）: {e}", "danger")
+        return redirect(url_for("main.index"))
+    db.execute("UPDATE cloud_account SET username=?, password=? WHERE id=?", (new_username, new_password, aid))
+    db.commit()
+    # 如果保活任务在跑，更新它
+    if account["keepalive_enabled"]:
+        remove_job(aid)
+        add_job(aid, new_username, new_password, account["keepalive_interval"],
+                current_app.config["DATABASE"], current_app.config.get("HOLD_SECONDS", 10))
+    flash("账号密码修改成功", "success")
+    return redirect(url_for("main.index"))
+
+
+@main_bp.route("/accounts/<int:aid>/refresh", methods=["POST"])
+@login_required
+def refresh_vms(aid):
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    if not account:
+        flash("账号不存在", "danger")
+        return redirect(url_for("main.index"))
+    try:
+        client = soho_login(account["username"], account["password"])
+        vms = fetch_vm_list(client)
+    except Exception as e:
+        flash(f"刷新失败: {e}", "danger")
+        return redirect(url_for("main.account_detail", aid=aid))
+
+    db.execute("DELETE FROM cloud_vm WHERE account_id=?", (aid,))
+    for vm in vms:
+        db.execute(
+            "INSERT INTO cloud_vm (account_id, user_service_id, vm_name, spu_code, sku_name, "
+            "vm_status, remain_duration_time, cpu, memory, raw_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (aid, vm.get("userServiceId"), vm.get("vmName"), vm.get("spuCode"),
+             vm.get("skuName"), vm.get("vmStatusShow"),
+             str(vm.get("remainDurationTime") or ""), vm.get("cpu"), vm.get("memory"),
+             json.dumps(vm, ensure_ascii=False)),
+        )
+    db.execute("UPDATE cloud_account SET last_login_at=? WHERE id=?", (datetime.now().isoformat(), aid))
+    db.commit()
+    flash(f"刷新成功 ({len(vms)} 台)", "success")
+    return redirect(url_for("main.account_detail", aid=aid))
+
+
+@main_bp.route("/accounts/<int:aid>/toggle", methods=["POST"])
+@login_required
+def toggle_keepalive(aid):
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    if not account:
+        return redirect(url_for("main.index"))
+
+    new_state = 0 if account["keepalive_enabled"] else 1
+    db.execute("UPDATE cloud_account SET keepalive_enabled=? WHERE id=?", (new_state, aid))
+    db.commit()
+
+    db_path = current_app.config["DATABASE"]
+    hold = current_app.config.get("HOLD_SECONDS", 10)
+    if new_state:
+        add_job(aid, account["username"], account["password"], account["keepalive_interval"], db_path, hold)
+        flash("保活已开启", "success")
+    else:
+        remove_job(aid)
+        flash("保活已关闭", "info")
+    return redirect(url_for("main.account_detail", aid=aid))
+
+
+@main_bp.route("/accounts/<int:aid>/interval", methods=["POST"])
+@login_required
+def set_interval(aid):
+    interval = int(request.form.get("interval", 600))
+    if interval not in [v for v, _ in INTERVAL_OPTIONS]:
+        interval = 600
+    db = get_db()
+    db.execute("UPDATE cloud_account SET keepalive_interval=? WHERE id=?", (interval, aid))
+    db.commit()
+    reschedule_job(aid, interval)
+    flash(f"间隔已设为 {interval // 60} 分钟", "success")
+    return redirect(url_for("main.account_detail", aid=aid))
+
+
+@main_bp.route("/accounts/<int:aid>/vm/<int:vmid>/keepalive", methods=["POST"])
+@login_required
+def keepalive_vm(aid, vmid):
+    """单台云电脑保活（支持 AJAX）"""
+    from flask import jsonify
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    vm_row = db.execute("SELECT * FROM cloud_vm WHERE id=? AND account_id=?", (vmid, aid)).fetchone()
+    if not account or not vm_row:
+        return jsonify({"success": False, "msg": "账号或云电脑不存��"}), 404
+
+    from keepalive_core import soho_login, keepalive_single_vm
+    try:
+        client = soho_login(account["username"], account["password"])
+        vm_dict = json.loads(vm_row["raw_json"]) if vm_row["raw_json"] else {"userServiceId": vm_row["user_service_id"], "vmName": vm_row["vm_name"]}
+        result = keepalive_single_vm(client, vm_dict, hold=current_app.config.get("HOLD_SECONDS", 10))
+        now = datetime.now().isoformat()
+        db.execute(
+            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (aid, result.vm_name, result.user_service_id,
+             "success" if result.success else "failed", result.cag_code, result.error or None),
+        )
+        db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",
+                   (now, "success" if result.success else "failed", aid))
+        db.commit()
+        return jsonify({"success": result.success, "msg": f"{result.vm_name}: {'保活成功' if result.success else '保活失败 ' + result.error}", "cag_code": result.cag_code})
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"保活出错: {e}"}), 500
+
+
+@main_bp.route("/accounts/<int:aid>/keepalive-now", methods=["POST"])
+@login_required
+def keepalive_now(aid):
+    from flask import jsonify
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    if not account:
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"success": False, "msg": "账号不存在"}), 404
+        return redirect(url_for("main.index"))
+
+    results = keepalive_account(account["username"], account["password"],
+                                hold=current_app.config.get("HOLD_SECONDS", 10))
+    now = datetime.now().isoformat()
+    status = "success" if all(r.success for r in results) else "failed"
+    for r in results:
+        db.execute(
+            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (aid, r.vm_name, r.user_service_id, "success" if r.success else "failed", r.cag_code, r.error or None),
+        )
+    db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
+    db.commit()
+
+    msg = " | ".join(f"{r.vm_name}: {'✅' if r.success else '❌'}" for r in results)
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"success": status == "success", "msg": msg})
+    flash(f"保活完成: {msg}", "success" if status == "success" else "warning")
+    return redirect(url_for("main.account_detail", aid=aid))
+
+
+@main_bp.route("/logs")
+@login_required
+def logs():
+    db = get_db()
+    rows = db.execute(
+        "SELECT l.*, a.username FROM keepalive_log l "
+        "JOIN cloud_account a ON l.account_id=a.id "
+        "ORDER BY l.executed_at DESC LIMIT 100"
+    ).fetchall()
+    return render_template("logs.html", logs=rows)

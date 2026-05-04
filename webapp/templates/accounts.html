@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4>云电脑账号</h4>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addModal">+ 添加账号</button>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    {% macro sort_link(col, label) %}
+                    <th>
+                        <a href="?sort={{ col }}&order={{ 'desc' if current_sort == col and current_order == 'asc' else 'asc' }}" class="text-decoration-none text-dark">
+                            {{ label }}
+                            {% if current_sort == col %}
+                                {{ '▲' if current_order == 'asc' else '▼' }}
+                            {% endif %}
+                        </a>
+                    </th>
+                    {% endmacro %}
+                    {{ sort_link('username', '账号') }}
+                    {{ sort_link('vm_count', '云电脑数') }}
+                    {{ sort_link('keepalive', '保活') }}
+                    {{ sort_link('interval', '间隔') }}
+                    {{ sort_link('last', '最近保活') }}
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for a in accounts %}
+                <tr>
+                    <td><strong>{{ a.username }}</strong></td>
+                    <td>{{ a.vm_count }} 台</td>
+                    <td>
+                        {% if a.keepalive_enabled %}
+                        <span class="badge badge-on">开启</span>
+                        {% else %}
+                        <span class="badge badge-off">关闭</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% for val, label in intervals %}
+                            {% if a.keepalive_interval == val %}{{ label }}{% endif %}
+                        {% endfor %}
+                    </td>
+                    <td>
+                        {% if a.last_keepalive_at %}
+                        <small>{{ a.last_keepalive_at[:16] }}
+                            {% if a.last_keepalive_status == 'success' %}✅{% else %}❌{% endif %}
+                        </small>
+                        {% else %}<small class="text-muted">未执行</small>{% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-success"
+                                data-url="{{ url_for('main.keepalive_now', aid=a.id) }}"
+                                onclick="doKeepaliveAll(this)">⚡ 保活</button>
+                        <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal{{ a.id }}">✏️ 修改</button>
+                        <a href="{{ url_for('main.account_detail', aid=a.id) }}" class="btn btn-sm btn-outline-primary">详情</a>
+                        <form method="POST" action="{{ url_for('main.delete_account', aid=a.id) }}" class="d-inline"
+                              onsubmit="return confirm('确定删除 {{ a.username }}？')">
+                            <button class="btn btn-sm btn-outline-danger">删除</button>
+                        </form>
+                    </td>
+                </tr>
+            {% endfor %}
+            {% if not accounts %}
+                <tr><td colspan="6" class="text-center text-muted py-4">暂无账号，点击右上角添加</td></tr>
+            {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 修改账号 Modal -->
+{% for a in accounts %}
+<div class="modal fade" id="editModal{{ a.id }}" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.edit_account', aid=a.id) }}">
+                <div class="modal-header">
+                    <h5 class="modal-title">修改账号: {{ a.username }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">SOHO 账号</label>
+                        <input type="text" name="username" class="form-control" value="{{ a.username }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">密码</label>
+                        <input type="text" name="password" class="form-control" value="{{ a.password }}" required>
+                    </div>
+                    <p class="text-muted small">保存时会验证账号密码是否正确</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存并验证</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<!-- 添加账号 Modal -->
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.add_account') }}">
+                <div class="modal-header">
+                    <h5 class="modal-title">添加云电脑账号</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">SOHO 账号</label>
+                        <input type="text" name="username" class="form-control" placeholder="如 zhaoboy" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">密码</label>
+                        <input type="password" name="password" class="form-control" required>
+                    </div>
+                    <p class="text-muted small">添加后会自动登录并获取云电脑列表</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">添加并登录</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function doKeepaliveAll(btn) {
+    const url = btn.dataset.url;
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 中...';
+    btn.classList.remove('btn-outline-success', 'btn-outline-danger');
+    btn.classList.add('btn-secondary');
+
+    fetch(url, {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false;
+            btn.textContent = data.success ? '✅ 成功' : '❌ 失败';
+            btn.classList.remove('btn-secondary');
+            btn.classList.add(data.success ? 'btn-outline-success' : 'btn-outline-danger');
+            setTimeout(() => {
+                btn.textContent = origText;
+                btn.classList.remove('btn-outline-danger');
+                btn.classList.add('btn-outline-success');
+            }, 3000);
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.textContent = '❌ 错误';
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-outline-danger');
+            setTimeout(() => {
+                btn.textContent = origText;
+                btn.classList.remove('btn-outline-danger');
+                btn.classList.add('btn-outline-success');
+            }, 3000);
+        });
+}
+</script>
+{% endblock %}

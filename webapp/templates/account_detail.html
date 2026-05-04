@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4>{{ account.username }}</h4>
+    <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">← 返回</a>
+</div>
+
+<!-- 修改账号密码 -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>账号信息</strong>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#editForm">修改</button>
+    </div>
+    <div class="collapse" id="editForm">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('main.edit_account', aid=account.id) }}" class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label">SOHO 账号</label>
+                    <input type="text" name="username" class="form-control" value="{{ account.username }}">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">密码</label>
+                    <input type="password" name="password" class="form-control" value="{{ account.password }}">
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-primary">保存并验证</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 保活控制 -->
+<div class="card mb-4">
+    <div class="card-body d-flex align-items-center gap-3 flex-wrap">
+        <form method="POST" action="{{ url_for('main.toggle_keepalive', aid=account.id) }}">
+            <button class="btn {{ 'btn-danger' if account.keepalive_enabled else 'btn-success' }}">
+                {{ '关闭保活' if account.keepalive_enabled else '开启保活' }}
+            </button>
+        </form>
+        <form method="POST" action="{{ url_for('main.set_interval', aid=account.id) }}" class="d-flex gap-2">
+            <select name="interval" class="form-select form-select-sm" style="width:auto">
+                {% for val, label in intervals %}
+                <option value="{{ val }}" {{ 'selected' if account.keepalive_interval == val }}>{{ label }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-sm btn-outline-primary">设置间隔</button>
+        </form>
+        <form method="POST" action="{{ url_for('main.keepalive_now', aid=account.id) }}">
+            <button class="btn btn-sm btn-warning">⚡ 立即保活</button>
+        </form>
+        <form method="POST" action="{{ url_for('main.refresh_vms', aid=account.id) }}">
+            <button class="btn btn-sm btn-outline-info">🔄 刷新列表</button>
+        </form>
+        <div class="ms-auto text-muted small">
+            {% if account.last_keepalive_at %}
+            最近: {{ account.last_keepalive_at[:16] }}
+            {{ '✅' if account.last_keepalive_status == 'success' else '❌' }}
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- 云电脑列表 -->
+<div class="card mb-4">
+    <div class="card-header"><strong>云电脑列表</strong></div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>名称</th>
+                    <th>配置详情</th>
+                    <th>状态</th>
+                    <th>剩余时长</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for vm in vms %}
+                <tr>
+                    <td>
+                        <strong>{{ vm.vm_name }}</strong>
+                        {% if vm.spu_name %}<br><small class="text-primary">{{ vm.spu_name }}</small>{% endif %}
+                        {% if vm.sku_name %}<br><small class="text-muted">{{ vm.sku_name }}</small>{% endif %}
+                    </td>
+                    <td>
+                        <small>
+                        {% if vm.sku_spec_str %}
+                            {{ vm.sku_spec_str }}
+                        {% else %}
+                            {{ vm.cpu or '' }} / {{ vm.memory or '' }}
+                        {% endif %}
+                        </small>
+                    </td>
+                    <td>
+                        {% if vm.vm_status == '运行中' %}
+                        <span class="badge bg-success">{{ vm.vm_status }}</span>
+                        {% elif vm.vm_status == '已关机' %}
+                        <span class="badge bg-secondary">{{ vm.vm_status }}</span>
+                        {% else %}
+                        <span class="badge bg-warning">{{ vm.vm_status or '未知' }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not vm.remain_duration_time or vm.remain_duration_time == 'None' or vm.remain_duration_time == '' %}
+                        <span class="text-success fw-bold">无限</span>
+                        {% else %}
+                        {% set hours = (vm.remain_duration_time|int / 3600)|round(1) %}
+                        {{ hours }} 小时
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-success btn-keepalive"
+                                data-url="{{ url_for('main.keepalive_vm', aid=account.id, vmid=vm.id) }}"
+                                onclick="doKeepalive(this)">⚡ 保活</button>
+                    </td>
+                </tr>
+            {% endfor %}
+            {% if not vms %}
+                <tr><td colspan="5" class="text-center text-muted">无云电脑</td></tr>
+            {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 最近日志 -->
+<div class="card">
+    <div class="card-header"><strong>最近保活日志</strong></div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr><th>时间</th><th>云电脑</th><th>状态</th><th>CAG</th><th>错误</th></tr>
+            </thead>
+            <tbody>
+            {% for l in logs %}
+                <tr>
+                    <td><small>{{ l.executed_at[:16] if l.executed_at else '' }}</small></td>
+                    <td>{{ l.vm_name }}</td>
+                    <td>{{ '✅' if l.status == 'success' else '❌' }}</td>
+                    <td>{{ l.cag_reply_code or '' }}</td>
+                    <td><small class="text-danger">{{ l.error_message or '' }}</small></td>
+                </tr>
+            {% endfor %}
+            {% if not logs %}
+                <tr><td colspan="5" class="text-center text-muted">暂无日志</td></tr>
+            {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function doKeepalive(btn) {
+    const url = btn.dataset.url;
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 保活中...';
+    btn.classList.remove('btn-outline-success', 'btn-outline-danger');
+    btn.classList.add('btn-secondary');
+
+    fetch(url, {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false;
+            if (data.success) {
+                btn.textContent = '✅ 成功';
+                btn.classList.remove('btn-secondary');
+                btn.classList.add('btn-outline-success');
+            } else {
+                btn.textContent = '❌ 失败';
+                btn.classList.remove('btn-secondary');
+                btn.classList.add('btn-outline-danger');
+            }
+            // 3秒后恢复
+            setTimeout(() => { btn.textContent = origText; btn.classList.remove('btn-outline-danger'); btn.classList.add('btn-outline-success'); }, 3000);
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.textContent = '❌ 错误';
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-outline-danger');
+            setTimeout(() => { btn.textContent = origText; btn.classList.remove('btn-outline-danger'); btn.classList.add('btn-outline-success'); }, 3000);
+        });
+}
+</script>
+{% endblock %}
