@@ -183,24 +183,28 @@ function setExpire(sel) {
         return;
     }
     const body = new URLSearchParams({expire_type: val});
-    fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'}, body})
+    const hdrs = {'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded','X-CSRFToken':csrfToken};
+    fetch(url, {method:'POST', headers:hdrs, body})
         .then(r => r.json())
         .then(data => {
             const cell = sel.closest('tr').querySelector('.expire-cell');
-            if (cell) cell.innerHTML = data.expire_at ? '<small class="text-success">'+data.expire_at+'</small>' : '<small class="text-success">永久</small>';
+            if (cell) cell.textContent = data.expire_at || '永久';
             sel.selectedIndex = 0;
-        });
+        })
+        .catch(e => console.error('setExpire error', e));
 }
 function setExpireCustom(input) {
     const url = input.dataset.url;
     const body = new URLSearchParams({expire_type:'custom', custom_date: input.value});
-    fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'}, body})
+    const hdrs = {'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded','X-CSRFToken':csrfToken};
+    fetch(url, {method:'POST', headers:hdrs, body})
         .then(r => r.json())
         .then(data => {
             const cell = input.closest('tr').querySelector('.expire-cell');
-            if (cell) cell.innerHTML = '<small class="text-success">'+data.expire_at+'</small>';
+            if (cell) cell.textContent = data.expire_at || '永久';
             input.style.display = 'none';
-        });
+        })
+        .catch(e => console.error('setExpireCustom error', e));
 }
 
 function doKeepaliveAll(btn) {

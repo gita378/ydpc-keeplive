@@ -186,6 +186,9 @@ def refresh_vms(aid):
         flash(f"刷新失败: {e}", "danger")
         return redirect(url_for("main.account_detail", aid=aid))
 
+    # 保留 VM 保活开关状态
+    old_ka = {r["user_service_id"]: r["keepalive_enabled"] for r in
+              db.execute("SELECT user_service_id, keepalive_enabled FROM cloud_vm WHERE account_id=?", (aid,)).fetchall()}
     db.execute("DELETE FROM cloud_vm WHERE account_id=?", (aid,))
     for vm in vms:
         db.execute(
@@ -197,6 +200,9 @@ def refresh_vms(aid):
              str(vm.get("remainDurationTime") or ""), vm.get("cpu"), vm.get("memory"),
              json.dumps(vm, ensure_ascii=False)),
         )
+    # 恢复保活开关
+    for usid, ka in old_ka.items():
+        db.execute("UPDATE cloud_vm SET keepalive_enabled=? WHERE account_id=? AND user_service_id=?", (ka, aid, usid))
     db.execute("UPDATE cloud_account SET last_login_at=? WHERE id=?", (datetime.now().isoformat(), aid))
     db.commit()
     flash(f"刷新成功 ({len(vms)} 台)", "success")
@@ -229,7 +235,10 @@ def toggle_keepalive(aid):
 @main_bp.route("/accounts/<int:aid>/interval", methods=["POST"])
 @login_required
 def set_interval(aid):
-    interval = int(request.form.get("interval", 600))
+    try:
+        interval = int(request.form.get("interval", 600))
+    except (ValueError, TypeError):
+        interval = 600
     if interval not in [v for v, _ in INTERVAL_OPTIONS]:
         interval = 600
     db = get_db()
@@ -329,8 +338,12 @@ def keepalive_now(aid):
             return jsonify({"success": False, "msg": "账号不存在"}), 404
         return redirect(url_for("main.index"))
 
+    # 跳过关闭保活的 VM
+    disabled = {r["user_service_id"] for r in
+                db.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (aid,)).fetchall()}
     results, fresh_vms = keepalive_account(account["username"], account["password"],
-                                           hold=current_app.config.get("HOLD_SECONDS", 10))
+                                           hold=current_app.config.get("HOLD_SECONDS", 10),
+                                           skip_usids=disabled)
     now = datetime.now().isoformat()
     status = "success" if all(r.success for r in results) else "failed"
     # 刷新 VM 状态
