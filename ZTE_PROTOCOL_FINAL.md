@@ -486,3 +486,77 @@ accessToken 可能绑定了 getToken 时的后端实例。startDesktop 被路由
 2. IDA 查 `libvdconn::SendHttpRequest` 是否有 sticky session header
 3. 查 CAG `X-CCT-MS` 响应 header 含义
 4. 尝试强制 TCP 连接复用确保命中同一后端
+
+---
+
+## 十三、云电脑开机流程（2026-05-05 实测确认）
+
+### 13.1 完整时序（从日志还原）
+
+```
+用户点"连接"一台已关机的云电脑 (vmStatus=23)
+
+16:37:49  Electron:
+          ├── getFirmAuth(userServiceId)         ← ★ 通知平台"用户要连接"，触发后端开机调度
+          │   返回 vmUserName/vmPassword/vmcIp/cagIp/cagPort
+          │
+          └── connectWorker(d.data)              ← 传给 native SDK
+
+16:37:49  native SDK (libvdconn → uSmartView_VDI_Client):
+          ├── ZTEC 连通性测试 → 200 OK → close
+          ├── CSAP cs_sysConfig.action            ← 系统配置
+          ├── CSAP cs_getToken.action             ← 拿 accessToken
+          ├── CSAP cs_getDesktopList.action       ← 拿 desktop UUID
+          └── CSAP cs_startDesktop.action         ← ★ result:0 触发 VM 开机
+
+16:37:54  轮询等待 VM 就绪:
+          ├── cs_startDesktop_async_query  (每 2s)
+          ├── cs_startDesktop_async_query
+          ├── cs_startDesktop_async_query
+          ├── ...
+16:38:05  └── cs_startDesktop_async_query  ← 拿到 connectStr (含 session-key/IPv6/port)
+
+16:38:05  KCP/UDT/TLS + SPICE 连接建立
+          └── all channel 6/6 connect success
+
+~30s 后  list/v6 查询: vmStatus=1 (运行中)
+```
+
+### 13.2 关键发现
+
+1. **`getFirmAuth` 是开机的触发点** — 调用后 ~30s VM 从已关机变运行中
+2. **`cs_startDesktop.action` 是 CSAP 层的开机命令** — 官方 result:0 成功
+3. **轮询 `async_query` 约 16 秒** — 等 VM 内部初始化完成返回 connectStr
+4. **保活脚本有效的根本原因**: 每次 `getFirmAuth` 调用 = 通知平台"用户要连接" = 重置 30 分钟关机倒计时
+
+### 13.3 保活为什么不需要 KCP/SPICE
+
+```
+保活脚本做的:                    平台判定:
+getFirmAuth ──────────────────→ "用户请求连接" → 重置 30 分钟倒计时
+heartbeat   ──────────────────→ "客户端在线"
+ZTEC 200 OK ──────────────────→ "CAG 可达"
+
+不需要做的:
+cs_startDesktop               → 只在开机时需要
+KCP/UDT/TLS/SPICE             → 只在显示桌面画面时需要
+DISPLAY_INIT                  → 只在需要 Surface 创建时需要
+```
+
+### 13.4 Python 开机实现方向
+
+如果需要 Python 远程开机（不连桌面）：
+```python
+# 1. SOHO 登录
+client = soho_login(username, password)
+# 2. 列出云电脑
+vms = client.list_cloud_pcs()
+# 3. getFirmAuth 触发开机
+auth = client.get_firm_auth(vm["userServiceId"])
+# 4. 等待 30s 后查询状态
+time.sleep(30)
+vms = client.list_cloud_pcs()
+# vm["vmStatusShow"] 应该变成 "运行中"
+```
+
+注意：`getFirmAuth` 对已运行的 VM 也能调（返回连接参数），不会重启它。
