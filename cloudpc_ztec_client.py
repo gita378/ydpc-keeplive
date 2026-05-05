@@ -600,7 +600,7 @@ class ZteCsapClient:
             return desktops[0]
         raise RuntimeError("cs_getDesktopList returned an empty desktopList")
 
-    def _start_desktop_body(self, access_token: str, desktop: Dict[str, Any]) -> Dict[str, Any]:
+    def _start_desktop_query(self, access_token: str, desktop: Dict[str, Any]) -> str:
         user_id = int(desktop.get("userId", 0))
         group_id = int(desktop.get("groupId", -1))
         pool_id = int(desktop.get("poolId", 0))
@@ -609,36 +609,29 @@ class ZteCsapClient:
         desktop_uuid = str(desktop.get("uuid") or "")
         if not desktop_uuid:
             raise RuntimeError(f"desktop has no uuid: {desktop}")
-        return {
-            "RspSecurity": 1,
-            "SNcode": self.sn_code,
-            "accessToken": access_token,
-            "allowExtUSBPolicy": 1,
-            "allowSwitchRap": 1,
-            "assignRelationtoString": f"{user_id},{group_id},{pool_id}",
-            "connectionType": connection_type,
-            "diskNo": self.sn_code,
-            "encryption": 1,
-            "hostName": self.host_name,
-            "isvm": 0,
-            "language": self.language,
-            "localipandmac": f"{self.client_ip},{self.mac}",
-            "netType": self.net_type,
-            "newcharsetparse": 1,
-            "newpara": 1,
-            "prover": 1,
-            "raptype": 2 if connection_type == 0 else 1,
-            "requestFrom": self.request_from,
-            "supportAsync": 1,
-            "supportCustomConfig": "00000000000000000000000000000011",
-            "type": desktop_type,
-            "upmnew": 1,
-            "uuid": desktop_uuid,
-            "verifyTerminalBind": "11",
-            "version": self.version,
-            "vmid": str(desktop.get("vmId") or self.auth.vm_id),
-            "watermarkType": 1,
-        }
+        vm_id = str(desktop.get("vmId") or self.auth.vm_id)
+        return (
+            f"accessToken={urllib.parse.quote(access_token, safe='')}"
+            f"&uuid={urllib.parse.quote(desktop_uuid, safe='')}"
+            f"&vmid={urllib.parse.quote(vm_id, safe='')}"
+            f"&type={desktop_type}"
+            f"&connectionType={connection_type}"
+            f"&assignRelationtoString={urllib.parse.quote(f'{user_id},{group_id},{pool_id}', safe='')}"
+            f"&version={urllib.parse.quote(self.version, safe='')}"
+            f"&language={urllib.parse.quote(self.language, safe='')}"
+            f"&requestFrom={self.request_from}"
+            f"&isvm=0&encryption=1&prover=1&supportAsync=1&allowSwitchRap=1"
+            f"&raptype={2 if connection_type == 0 else 1}"
+            f"&netType={self.net_type}"
+            f"&SNcode={urllib.parse.quote(self.sn_code, safe='')}"
+            f"&hostName={urllib.parse.quote(self.host_name, safe='')}"
+            f"&localipandmac={urllib.parse.quote(f'{self.client_ip},{self.mac}', safe='')}"
+            f"&diskNo={urllib.parse.quote(self.sn_code, safe='')}"
+            "&newpara=1&newcharsetparse=1&upmnew=1&watermarkType=1"
+            "&allowExtUSBPolicy=1&verifyTerminalBind=11"
+            "&supportCustomConfig=00000000000000000000000000000011"
+            "&RspSecurity=1"
+        )
 
     def _decode_connect_from_outer(self, decoded: Dict[str, Any]) -> Optional[ZteDecodedConnectCommand]:
         command = decode_zte_connect_command_from_outer_json(decoded, self.keys)
@@ -647,7 +640,8 @@ class ZteCsapClient:
         return None
 
     def start_desktop(self, access_token: str, desktop: Dict[str, Any]) -> Optional[ZteDecodedConnectCommand]:
-        decoded = self._post_security("cs_startDesktop.action", "", self._start_desktop_body(access_token, desktop))
+        query = self._start_desktop_query(access_token, desktop)
+        decoded = self._post_security("cs_startDesktop.action", query, "")
         if str(decoded.get("result")) != "0":
             raise RuntimeError(f"cs_startDesktop failed: {decoded}")
         return self._decode_connect_from_outer(decoded)

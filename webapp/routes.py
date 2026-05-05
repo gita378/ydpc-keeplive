@@ -3,7 +3,7 @@ from datetime import datetime
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from database import get_db
 from auth import login_required
-from keepalive_core import soho_login, fetch_vm_list, keepalive_account
+from keepalive_core import soho_login, fetch_vm_list, keepalive_account, boot_vm
 from scheduler import add_job, remove_job, reschedule_job
 
 main_bp = Blueprint("main", __name__)
@@ -37,7 +37,9 @@ def index():
     accounts_raw = db.execute(
         f"SELECT a.*, "
         f"(SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id) as vm_count, "
-        f"(SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id AND keepalive_enabled=1) as vm_keepalive_count "
+        f"(SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id AND keepalive_enabled=1) as vm_keepalive_count, "
+        f"(SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id AND vm_status='运行中') as vm_running, "
+        f"(SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id AND vm_status='已关机') as vm_off "
         f"FROM cloud_account a ORDER BY {sort_col} {order_dir}"
     ).fetchall()
     accounts = [dict(a) for a in accounts_raw]
@@ -294,6 +296,63 @@ def toggle_vm_keepalive(aid, vmid):
     db.commit()
     return jsonify({"success": True, "enabled": bool(new_state),
                     "msg": f"{vm['vm_name']}: {'开启' if new_state else '关闭'}保活"})
+
+
+@main_bp.route("/accounts/<int:aid>/vm/<int:vmid>/boot", methods=["POST"])
+@login_required
+def boot_vm_route(aid, vmid):
+    """单台云电脑开机"""
+    from flask import jsonify
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    vm_row = db.execute("SELECT * FROM cloud_vm WHERE id=? AND account_id=?", (vmid, aid)).fetchone()
+    if not account or not vm_row:
+        return jsonify({"success": False, "msg": "账号或云电脑不存在"}), 404
+
+    try:
+        client = soho_login(account["username"], account["password"])
+        vm_dict = json.loads(vm_row["raw_json"]) if vm_row["raw_json"] else {
+            "userServiceId": vm_row["user_service_id"], "vmName": vm_row["vm_name"], "vmStatus": 23
+        }
+        ok, msg = boot_vm(client, vm_dict)
+        if ok:
+            db.execute("UPDATE cloud_vm SET vm_status='运行中' WHERE id=?", (vmid,))
+            db.commit()
+        return jsonify({"success": ok, "msg": msg})
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"开机出错: {e}"}), 500
+
+
+@main_bp.route("/accounts/<int:aid>/boot-all", methods=["POST"])
+@login_required
+def boot_all_vms(aid):
+    """账号下所有关机 VM 全部开机"""
+    from flask import jsonify
+    db = get_db()
+    account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+    if not account:
+        return jsonify({"success": False, "msg": "账号不存在"}), 404
+
+    try:
+        client = soho_login(account["username"], account["password"])
+        vms = fetch_vm_list(client)
+        results = []
+        for vm in vms:
+            vm_status = vm.get("vmStatus")
+            if vm_status in (23, "23"):
+                ok, msg = boot_vm(client, vm)
+                results.append(msg)
+                if ok:
+                    db.execute(
+                        "UPDATE cloud_vm SET vm_status='运行中' WHERE account_id=? AND user_service_id=?",
+                        (aid, int(vm["userServiceId"]))
+                    )
+        db.commit()
+        if not results:
+            return jsonify({"success": True, "msg": "所有 VM 已在运行中"})
+        return jsonify({"success": True, "msg": " | ".join(results)})
+    except Exception as e:
+        return jsonify({"success": False, "msg": f"开机出错: {e}"}), 500
 
 
 @main_bp.route("/accounts/<int:aid>/vm/<int:vmid>/keepalive", methods=["POST"])

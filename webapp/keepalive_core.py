@@ -279,10 +279,68 @@ def fetch_vm_list(client: CloudPcClient) -> list:
     return client.list_vms()
 
 
-def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout: int = 10) -> KeepaliveResult:
-    """对单台云电脑做保活"""
+def boot_vm(client: CloudPcClient, vm: dict, timeout: int = 30) -> tuple:
+    """开机单台关机状态的 VM，返回 (success, message)"""
     usid = int(vm["userServiceId"])
     name = vm.get("vmName", "?")
+    vm_status = vm.get("vmStatus")
+    if vm_status not in (23, "23"):
+        return True, f"{name}: 已在运行中(status={vm.get('vmStatusShow', vm_status)})"
+
+    try:
+        from pathlib import Path
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from cloudpc_ztec_client import (
+            FirmAuth, ZteCsapClient, load_zte_crypto_keys,
+        )
+
+        auth_data = client.get_firm_auth(usid)
+        firm_auth = FirmAuth(
+            vm_username=str(auth_data["vmUserName"]),
+            vm_password=str(auth_data["vmPassword"]),
+            vm_id=str(auth_data["vmId"]),
+            vmc_host=str(auth_data["vmcIp"]),
+            vmc_port=int(auth_data["vmcPort"]),
+            cag_host=str(auth_data["cagIp"]),
+            cag_port=int(auth_data["cagPort"]),
+        )
+
+        zte_app = Path("/Applications/移动云电脑.app/Contents/Resources/app.asar.unpacked"
+                       "/node_modules/chuanyunAddOn-zte/ccsdk/mac/uSmartView_VDI_Client.app/Contents")
+        keys = load_zte_crypto_keys(
+            installinfo=zte_app / "config" / "installinfo.ini",
+            frameworks_dir=zte_app / "Frameworks",
+            macos_dir=zte_app / "MacOS",
+        )
+
+        csap = ZteCsapClient(firm_auth, keys, timeout=timeout, verify_tls=False)
+        result = csap.get_fresh_connect_command(poll_timeout=60.0)
+        if result and result.connect_command and result.connect_command.session_key:
+            return True, f"{name}: 开机成功"
+        return True, f"{name}: 已发送开机指令"
+    except Exception as e:
+        LOG.error("[boot] %s 开机失败: %s", name, e)
+        return False, f"{name}: 开机失败 - {e}"
+
+
+def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout: int = 10,
+                        auto_boot: bool = True) -> KeepaliveResult:
+    """对单台云电脑做保活。如果 VM 关机且 auto_boot=True，先尝试开机"""
+    usid = int(vm["userServiceId"])
+    name = vm.get("vmName", "?")
+    vm_status = vm.get("vmStatus")
+
+    if auto_boot and vm_status in (23, "23"):
+        LOG.info("[%s] VM 处于关机状态，尝试自动开机...", name)
+        boot_ok, boot_msg = boot_vm(client, vm, timeout=30)
+        if not boot_ok:
+            return KeepaliveResult(
+                vm_name=name, user_service_id=usid,
+                success=False, error=f"自动开机失败: {boot_msg}",
+            )
+        LOG.info("[%s] %s", name, boot_msg)
+
     try:
         auth = client.get_firm_auth(usid)
         client.heartbeat(usid)

@@ -39,7 +39,15 @@
                         <br><small class="{{ 'text-danger' if a.expire_at[:10] < now_date else 'text-muted' }}">到期: {{ a.expire_at[:10] }}</small>
                         {% endif %}
                     </td>
-                    <td>{{ a.vm_count }} 台</td>
+                    <td>
+                        {{ a.vm_count }} 台
+                        {% if a.vm_running is defined %}
+                        <br><small>
+                            <span class="text-success">{{ a.vm_running }} 开</span>
+                            {% if a.vm_off > 0 %}<span class="text-danger">{{ a.vm_off }} 关</span>{% endif %}
+                        </small>
+                        {% endif %}
+                    </td>
                     <td>{{ a.vm_keepalive_count }}/{{ a.vm_count }}</td>
                     <td>
                         {% if a.keepalive_enabled %}
@@ -87,6 +95,11 @@
                         <button class="btn btn-sm btn-outline-success"
                                 data-url="{{ url_for('main.keepalive_now', aid=a.id) }}"
                                 onclick="doKeepaliveAll(this)">⚡</button>
+                        {% if a.vm_off > 0 %}
+                        <button class="btn btn-sm btn-primary"
+                                data-url="{{ url_for('main.boot_all_vms', aid=a.id) }}"
+                                onclick="doBootAll(this)">🖥</button>
+                        {% endif %}
                         <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal{{ a.id }}">✏️</button>
                         <a href="{{ url_for('main.account_detail', aid=a.id) }}" class="btn btn-sm btn-outline-primary">详情</a>
                         <form method="POST" action="{{ url_for('main.delete_account', aid=a.id) }}" class="d-inline"
@@ -174,6 +187,23 @@
 </div>
 
 <script>
+const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+function doBootAll(btn) {
+    const orig=btn.textContent;
+    btn.disabled=true;btn.textContent='⏳...';btn.className='btn btn-sm btn-secondary';
+    fetch(btn.dataset.url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':csrfToken}})
+        .then(r=>r.json()).then(data=>{
+            btn.disabled=false;
+            btn.textContent=data.success?'✅':'❌';
+            btn.className='btn btn-sm '+(data.success?'btn-success':'btn-danger');
+            setTimeout(()=>{if(data.success){btn.remove();}else{btn.textContent=orig;btn.className='btn btn-sm btn-primary';}},3000);
+        }).catch(()=>{
+            btn.disabled=false;btn.textContent='❌';btn.className='btn btn-sm btn-danger';
+            setTimeout(()=>{btn.textContent=orig;btn.className='btn btn-sm btn-primary';},3000);
+        });
+}
+
 function setExpire(sel) {
     const url = sel.dataset.url;
     const val = sel.value;

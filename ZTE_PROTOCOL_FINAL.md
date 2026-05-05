@@ -560,3 +560,134 @@ vms = client.list_cloud_pcs()
 ```
 
 注意：`getFirmAuth` 对已运行的 VM 也能调（返回连接参数），不会重启它。
+
+---
+
+## 十四、CSAP startDesktop 1000100 深度分析（2026-05-05）
+
+### 14.1 官方成功 vs Python 失败对比
+
+**官方成功的 CSAP 序列（vdconn.log 16:52）：**
+
+```
+16:52:01.917  cs_sysConfig.action     → 200 OK (X-CCT-MS: 59 11)
+16:52:02.077  cs_getToken.action      → 200 OK (X-CCT-MS: 57 6)
+16:52:02.162  cs_getDesktopList.action → 200 OK (X-CCT-MS: 37 8)
+16:52:02.312  cs_startDesktop.action  → 200 OK (无 X-CCT-MS!)  ← ★ 成功
+16:52:07.412  async_query × N (每 2s)  → 200 OK
+16:52:26.654  拿到 connectStr          → VM 就绪
+16:52:27.968  "Success to Connectting desktop"
+16:52:30.351  "Success to Connect desktop"
+```
+
+**Python 失败：**
+```
+sysConfig     → 200 OK ✅
+getToken      → 200 OK ✅  
+getDesktopList→ 200 OK ✅
+startDesktop  → 1000100 "用户会话已失效" ❌
+```
+
+### 14.2 已确认一致的部分
+
+| 项目 | 官方 | Python |
+|------|------|--------|
+| Header: Content-Type | application/xml | application/xml ✅ |
+| Header: X-Ap-sHost | 10.21.2.232:8443 | 10.21.2.232:8443 ✅ |
+| Header: process_id | 2 | 2 ✅ |
+| Header: serialNum | 0001a305-...(固定) | 我们也用固定值 ✅ |
+| JSESSIONID | 每次响应都换(B204→4325→2C1B→7935) | 每次也换(正常) ✅ |
+| Connection | keep-alive(所有响应) | keep-alive ✅ |
+| body 加密 | ZTE_Security_Params AES | 相同算法 ✅ |
+| body JSON 字段 | 28 个字段 | 28 个字段相同 ✅ |
+
+### 14.3 关键差异
+
+1. **`X-CCT-MS` header 在 startDesktop 响应里消失** — sysConfig/getToken/getDesktopList 都有（格式 `{total_ms} {inner_ms}`），但 startDesktop 没有。说明 startDesktop 被 CAG/IAG 网关不同层处理。
+
+2. **Thread ID 固定 `0x30d2dd000`** — 官方所有 CSAP 请求在同一个 libcurl thread 上，保证同一条 TCP + TLS 连接。Python requests.Session 理论上也复用，但无法保证 100% 同一条底层 TCP。
+
+3. **`otlp_trace_id` 全程不变** — 官方保持 `a6f1d665c52b37706ae69999acf0d58d`。Python 每个请求生成新 trace_id。**可能 CAG 用 trace_id 做 session 路由。**
+
+### 14.4 最可能的根因
+
+**`otlp_trace_id` 是 CAG session 路由的 key。**
+
+官方：所有请求用同一个 `otlp_trace_id` → CAG 识别为同一个 session → 路由到同一个后端实例 → startDesktop 能找到 getToken 时创建的 session → 成功。
+
+Python：每个请求生成新的 `otlp_trace_id` → CAG 认为是不同 session → 路由到随机后端 → startDesktop 找不到 session → 1000100。
+
+### 14.5 修复方向
+
+在 `cloudpc_ztec_client.py` 的 `ZteCsapClient.__init__` 中，`self.trace_id` 已经是固定的（`os.urandom(16).hex()`），**在同一个 client 实例内不变**。但需要确认：
+1. `otlp_trace_id` header 是否在所有请求中正确传递（检查 `_headers()` 方法）
+2. `otlp_parent_id` 是否每次请求正确更新（官方每次不同）
+3. 是否还有其他 session 绑定因素（如 TLS session ticket、TCP 连接 ID）
+
+### 14.6 开机的完整 API 链路
+
+```
+Electron 层:
+  1. list/v6 → 看到 vmStatus=23 (已关机)
+  2. 用户点"连接"
+  3. getFirmAuth(userServiceId) → 拿 vmUserName/vmPassword/cagIp
+  4. connectWorker(d.data) → 传给 native SDK
+
+native SDK (libvdconn):
+  5. InitLogAndSocket → 初始化
+  6. connectDesktop(vmId) → 开始连接
+  7. SetClientSysInfoForGetToken → 设客户端信息
+  
+CSAP 序列 (via CAG HTTPS):
+  8. cs_sysConfig.action → 系统配置
+  9. cs_getToken.action → 拿 accessToken
+  10. cs_getDesktopList.action → 拿 desktop UUID
+  11. cs_startDesktop.action → ★ 触发 VM 开机
+  12. cs_startDesktop_async_query × N → 每 2s 轮询等 VM 就绪
+      → 拿到 connectStr (含 session-key/IPv6/port)
+
+连接建立:
+  13. ZTEC 连通性测试 → 200 OK → close
+  14. KCP/UDT + TLS 1.3
+  15. tunnel add_link
+  16. SPICE 6/6 channels success
+  17. 桌面画面显示
+```
+
+## 十五、startDesktop 1000100 修复（2026-05-05 已解决）
+
+### 根因
+
+`cs_startDesktop.action` 的参数必须放在 **query string** 中，body 发加密空字符串。
+之前错误地把 28 个参数放在加密 body 里、query 为空。
+
+IAG 网关行为：
+- 无 query string → IAG 直接拒绝 (1000100 未加密)
+- `?RspSecurity=1` 无 accessToken → VMC 返回 1000100 (加密)
+- `?accessToken=xxx&RspSecurity=1` + 参数在 body → VMC 返回 7010001
+- `?accessToken=xxx&uuid=...&vmid=...&所有参数&RspSecurity=1` + 空 body → ✅ 成功
+
+### 正确的请求格式
+
+```
+POST /cs/cs_startDesktop.action?accessToken=xxx&uuid=yyy&vmid=zzz&type=1&connectionType=0
+    &assignRelationtoString=47031,-1,63&version=V7.25.22&language=zh&requestFrom=9
+    &isvm=0&encryption=1&prover=1&supportAsync=1&allowSwitchRap=1&raptype=2&netType=2
+    &SNcode=xxx&hostName=xxx&localipandmac=ip,mac&diskNo=xxx
+    &newpara=1&newcharsetparse=1&upmnew=1&watermarkType=1
+    &allowExtUSBPolicy=1&verifyTerminalBind=11
+    &supportCustomConfig=00000000000000000000000000000011&RspSecurity=1
+
+Headers: Content-Type: application/xml
+         X-Ap-sHost: {vmc_host}:{vmc_port}
+         process_id: 2
+         serialNum: {uuid}
+         otlp_trace_id: {fixed_hex32}
+         otlp_parent_id: {per_request_hex16}
+
+Body: AES-CBC(PKCS7(""), uas_key, uas_iv).hex().upper()
+```
+
+### 结论
+
+CSAP 的 4 个 action 统一模式：所有业务参数在 query string，body 只传加密的辅助 JSON（getToken 传 {clienttype,hardware,nettype,ostype}）或加密空字符串。startDesktop 不需要 body 参数。

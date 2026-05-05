@@ -244,11 +244,15 @@ class CloudPcClient:
         from urllib3.util.ssl_ import create_urllib3_context
         from requests.adapters import HTTPAdapter
         import ssl as _ssl
+        _no_verify = not verify_tls
         class _TlsAdapter(HTTPAdapter):
             def init_poolmanager(self, *a, **kw):
                 ctx = create_urllib3_context()
                 ctx.minimum_version = _ssl.TLSVersion.TLSv1_2
                 ctx.maximum_version = _ssl.TLSVersion.TLSv1_2
+                if _no_verify:
+                    ctx.check_hostname = False
+                    ctx.verify_mode = _ssl.CERT_NONE
                 kw["ssl_context"] = ctx
                 return super().init_poolmanager(*a, **kw)
         self.session.mount("https://", _TlsAdapter())
