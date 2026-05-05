@@ -30,8 +30,8 @@ def login():
             captcha_input = request.form.get("captcha", "")
             if not verify_captcha(captcha_input):
                 flash("验证码错误", "danger")
-                captcha_q = generate_captcha()
-                return render_template("login.html", need_captcha=True, captcha_q=captcha_q)
+                captcha = generate_captcha()
+                return render_template("login.html", need_captcha=True, captcha=captcha)
 
         db = get_db()
         user = db.execute("SELECT * FROM admin_user WHERE username = ?", (username,)).fetchone()
@@ -49,8 +49,8 @@ def login():
             flash("用户名或密码错误", "danger")
         need_captcha = (fail_count + 1) >= current_app.config.get("LOGIN_MAX_ATTEMPTS", 5)
 
-    captcha_q = generate_captcha() if need_captcha else None
-    return render_template("login.html", need_captcha=need_captcha, captcha_q=captcha_q)
+    captcha = generate_captcha() if need_captcha else None
+    return render_template("login.html", need_captcha=need_captcha, captcha=captcha)
 
 
 @auth_bp.route("/change-password", methods=["GET", "POST"])

@@ -17,10 +17,18 @@
                         <button type="button" class="btn btn-outline-secondary toggle-pwd">👁</button>
                     </div>
                 </div>
-                {% if need_captcha %}
+                {% if need_captcha and captcha %}
                 <div class="mb-3">
-                    <label class="form-label">验证码：<strong>{{ captcha_q }}</strong></label>
+                    <label class="form-label">验证码</label>
+                    {% if captcha.image %}
+                    <div class="mb-2">
+                        <img src="{{ captcha.image }}" alt="验证码" style="height:60px;border-radius:4px;border:1px solid #ddd">
+                    </div>
+                    <input type="text" name="captcha" class="form-control" placeholder="请输入图中的数字" required>
+                    {% else %}
+                    <div class="mb-2"><strong>{{ captcha.text }}</strong></div>
                     <input type="text" name="captcha" class="form-control" placeholder="请输入计算结果" required>
+                    {% endif %}
                 </div>
                 {% endif %}
                 <button type="submit" class="btn btn-primary w-100">登录</button>
