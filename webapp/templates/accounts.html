@@ -53,7 +53,7 @@
                             {% if a.keepalive_interval == val %}{{ label }}{% endif %}
                         {% endfor %}
                     </td>
-                    <td>
+                    <td class="expire-cell">
                         {% if a.expire_at %}
                         <small class="{{ 'text-danger fw-bold' if a.expire_at[:10] < now_date else 'text-success' }}">{{ a.expire_at[:10] }}</small>
                         {% else %}
@@ -68,19 +68,22 @@
                         {% else %}<small class="text-muted">未执行</small>{% endif %}
                     </td>
                     <td>
-                        <form method="POST" action="{{ url_for('main.set_expire', aid=a.id) }}" class="d-inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <select name="expire_type" class="form-select form-select-sm d-inline-block" style="width:auto;font-size:12px"
-                                    onchange="if(this.value==='custom'){this.nextElementSibling.style.display='inline-block'}else{this.nextElementSibling.style.display='none';this.form.submit()}">
-                                <option value="" disabled selected>⏰ 到期</option>
+                        <span class="d-inline-flex align-items-center gap-1">
+                            <select class="form-select form-select-sm" style="width:auto;font-size:12px"
+                                    data-url="{{ url_for('main.set_expire', aid=a.id) }}"
+                                    onchange="setExpire(this)">
+                                <option value="" disabled selected>⏰ 设到期</option>
                                 <option value="never">永不过期</option>
                                 <option value="1d">+1天</option>
                                 <option value="1w">+1周</option>
                                 <option value="1m">+1月</option>
                                 <option value="1y">+1年</option>
                                 <option value="custom">自定义</option>
-                            </select><input type="date" name="custom_date" class="form-control form-control-sm d-inline-block" style="width:130px;display:none!important;font-size:12px" onchange="this.form.submit()">
-                        </form>
+                            </select>
+                            <input type="date" class="form-control form-control-sm custom-expire-date" style="width:130px;display:none;font-size:12px"
+                                   data-url="{{ url_for('main.set_expire', aid=a.id) }}"
+                                   onchange="setExpireCustom(this)">
+                        </span>
                         <button class="btn btn-sm btn-outline-success"
                                 data-url="{{ url_for('main.keepalive_now', aid=a.id) }}"
                                 onclick="doKeepaliveAll(this)">⚡</button>
@@ -171,6 +174,35 @@
 </div>
 
 <script>
+function setExpire(sel) {
+    const url = sel.dataset.url;
+    const val = sel.value;
+    if (val === 'custom') {
+        sel.parentElement.querySelector('.custom-expire-date').style.display = 'inline-block';
+        sel.selectedIndex = 0;
+        return;
+    }
+    const body = new URLSearchParams({expire_type: val});
+    fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'}, body})
+        .then(r => r.json())
+        .then(data => {
+            const cell = sel.closest('tr').querySelector('.expire-cell');
+            if (cell) cell.innerHTML = data.expire_at ? '<small class="text-success">'+data.expire_at+'</small>' : '<small class="text-success">永久</small>';
+            sel.selectedIndex = 0;
+        });
+}
+function setExpireCustom(input) {
+    const url = input.dataset.url;
+    const body = new URLSearchParams({expire_type:'custom', custom_date: input.value});
+    fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'}, body})
+        .then(r => r.json())
+        .then(data => {
+            const cell = input.closest('tr').querySelector('.expire-cell');
+            if (cell) cell.innerHTML = '<small class="text-success">'+data.expire_at+'</small>';
+            input.style.display = 'none';
+        });
+}
+
 function doKeepaliveAll(btn) {
     const url = btn.dataset.url;
     const origText = btn.textContent;

@@ -243,6 +243,8 @@ def set_interval(aid):
 @main_bp.route("/accounts/<int:aid>/expire", methods=["POST"])
 @login_required
 def set_expire(aid):
+    from flask import jsonify
+    from datetime import timedelta
     db = get_db()
     expire_type = request.form.get("expire_type", "")
     custom_date = request.form.get("custom_date", "").strip()
@@ -252,23 +254,22 @@ def set_expire(aid):
     elif expire_type == "custom" and custom_date:
         expire_at = custom_date + "T23:59:59"
     elif expire_type:
-        from datetime import datetime, timedelta
         days_map = {"1d": 1, "1w": 7, "1m": 30, "1y": 365}
         days = days_map.get(expire_type, 0)
-        if days:
-            expire_at = (datetime.now() + timedelta(days=days)).isoformat()
-        else:
-            expire_at = None
+        expire_at = (datetime.now() + timedelta(days=days)).isoformat() if days else None
     else:
         expire_at = None
 
     db.execute("UPDATE cloud_account SET expire_at=? WHERE id=?", (expire_at, aid))
     db.commit()
-    if expire_at:
-        flash(f"到期时间设为 {expire_at[:10]}", "success")
-    else:
-        flash("已设为永不过期", "success")
-    return redirect(url_for("main.account_detail", aid=aid))
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"success": True, "expire_at": expire_at[:10] if expire_at else None,
+                        "msg": f"到期: {expire_at[:10]}" if expire_at else "永不过期"})
+
+    flash(f"到期时间设为 {expire_at[:10]}" if expire_at else "已设为永不过期", "success")
+    referrer = request.referrer or url_for("main.index")
+    return redirect(referrer)
 
 
 @main_bp.route("/accounts/<int:aid>/vm/<int:vmid>/toggle-keepalive", methods=["POST"])
