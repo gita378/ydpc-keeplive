@@ -34,3 +34,4 @@ __pycache__/
 webapp/cloudpc.db
 webapp/cloudpc.db-shm
 webapp/cloudpc.db-wal
+.secret_key

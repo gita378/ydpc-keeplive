@@ -14,13 +14,17 @@
     <div class="collapse" id="editForm">
         <div class="card-body">
             <form method="POST" action="{{ url_for('main.edit_account', aid=account.id) }}" class="row g-2 align-items-end">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="col-md-4">
                     <label class="form-label">SOHO 账号</label>
                     <input type="text" name="username" class="form-control" value="{{ account.username }}">
                 </div>
                 <div class="col-md-4">
                     <label class="form-label">密码</label>
-                    <input type="password" name="password" class="form-control" value="{{ account.password }}">
+                    <div class="input-group">
+                        <input type="password" name="password" class="form-control" placeholder="输入密码">
+                        <button type="button" class="btn btn-outline-secondary toggle-pwd">👁</button>
+                    </div>
                 </div>
                 <div class="col-md-4">
                     <button class="btn btn-primary">保存并验证</button>
@@ -34,11 +38,13 @@
 <div class="card mb-4">
     <div class="card-body d-flex align-items-center gap-3 flex-wrap">
         <form method="POST" action="{{ url_for('main.toggle_keepalive', aid=account.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn {{ 'btn-danger' if account.keepalive_enabled else 'btn-success' }}">
                 {{ '关闭保活' if account.keepalive_enabled else '开启保活' }}
             </button>
         </form>
         <form method="POST" action="{{ url_for('main.set_interval', aid=account.id) }}" class="d-flex gap-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <select name="interval" class="form-select form-select-sm" style="width:auto">
                 {% for val, label in intervals %}
                 <option value="{{ val }}" {{ 'selected' if account.keepalive_interval == val }}>{{ label }}</option>
@@ -47,9 +53,11 @@
             <button class="btn btn-sm btn-outline-primary">设置间隔</button>
         </form>
         <form method="POST" action="{{ url_for('main.keepalive_now', aid=account.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-warning">⚡ 立即保活</button>
         </form>
         <form method="POST" action="{{ url_for('main.refresh_vms', aid=account.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-outline-info">🔄 刷新列表</button>
         </form>
         <div class="ms-auto text-muted small">
@@ -172,7 +180,6 @@ function doKeepalive(btn) {
                 btn.classList.remove('btn-secondary');
                 btn.classList.add('btn-outline-danger');
             }
-            // 3秒后恢复
             setTimeout(() => { btn.textContent = origText; btn.classList.remove('btn-outline-danger'); btn.classList.add('btn-outline-success'); }, 3000);
         })
         .catch(err => {

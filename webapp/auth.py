@@ -1,7 +1,8 @@
 from functools import wraps
-from flask import Blueprint, render_template, request, redirect, url_for, session, flash
+from flask import Blueprint, render_template, request, redirect, url_for, session, flash, current_app
 from werkzeug.security import check_password_hash
 from database import get_db
+from captcha_util import generate_captcha, verify_captcha
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
@@ -17,17 +18,39 @@ def login_required(f):
 
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
+    fail_count = session.get("_login_fails", 0)
+    need_captcha = fail_count >= current_app.config.get("LOGIN_MAX_ATTEMPTS", 5)
+
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
+
+        # 验证码校验
+        if need_captcha:
+            captcha_input = request.form.get("captcha", "")
+            if not verify_captcha(captcha_input):
+                flash("验证码错误", "danger")
+                captcha_q = generate_captcha()
+                return render_template("login.html", need_captcha=True, captcha_q=captcha_q)
+
         db = get_db()
         user = db.execute("SELECT * FROM admin_user WHERE username = ?", (username,)).fetchone()
         if user and check_password_hash(user["password_hash"], password):
             session["admin_logged_in"] = True
             session["admin_username"] = username
+            session.pop("_login_fails", None)
             return redirect(url_for("main.index"))
-        flash("用户名或密码错误", "danger")
-    return render_template("login.html")
+
+        session["_login_fails"] = fail_count + 1
+        remaining = current_app.config.get("LOGIN_MAX_ATTEMPTS", 5) - (fail_count + 1)
+        if remaining > 0:
+            flash(f"用户名或密码错误（还剩 {remaining} 次后需验证码）", "danger")
+        else:
+            flash("用户名或密码错误", "danger")
+        need_captcha = (fail_count + 1) >= current_app.config.get("LOGIN_MAX_ATTEMPTS", 5)
+
+    captcha_q = generate_captcha() if need_captcha else None
+    return render_template("login.html", need_captcha=need_captcha, captcha_q=captcha_q)
 
 
 @auth_bp.route("/change-password", methods=["GET", "POST"])

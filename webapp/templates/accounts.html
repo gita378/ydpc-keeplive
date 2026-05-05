@@ -59,7 +59,8 @@
                         <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal{{ a.id }}">✏️ 修改</button>
                         <a href="{{ url_for('main.account_detail', aid=a.id) }}" class="btn btn-sm btn-outline-primary">详情</a>
                         <form method="POST" action="{{ url_for('main.delete_account', aid=a.id) }}" class="d-inline"
-                              onsubmit="return confirm('确定删除 {{ a.username }}？')">
+                              onsubmit="return confirm('确定删除 ' + {{ a.username|tojson }} + '？')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button class="btn btn-sm btn-outline-danger">删除</button>
                         </form>
                     </td>
@@ -79,6 +80,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" action="{{ url_for('main.edit_account', aid=a.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="modal-header">
                     <h5 class="modal-title">修改账号: {{ a.username }}</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -90,7 +92,10 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">密码</label>
-                        <input type="text" name="password" class="form-control" value="{{ a.password }}" required>
+                        <div class="input-group">
+                            <input type="password" name="password" class="form-control" placeholder="输入新密码" required>
+                            <button type="button" class="btn btn-outline-secondary toggle-pwd">👁</button>
+                        </div>
                     </div>
                     <p class="text-muted small">保存时会验证账号密码是否正确</p>
                 </div>
@@ -109,6 +114,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" action="{{ url_for('main.add_account') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="modal-header">
                     <h5 class="modal-title">添加云电脑账号</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -120,7 +126,10 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">密码</label>
-                        <input type="password" name="password" class="form-control" required>
+                        <div class="input-group">
+                            <input type="password" name="password" class="form-control" required>
+                            <button type="button" class="btn btn-outline-secondary toggle-pwd">👁</button>
+                        </div>
                     </div>
                     <p class="text-muted small">添加后会自动登录并获取云电脑列表</p>
                 </div>
