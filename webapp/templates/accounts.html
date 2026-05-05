@@ -22,8 +22,10 @@
                     {% endmacro %}
                     {{ sort_link('username', '账号') }}
                     {{ sort_link('vm_count', '云电脑数') }}
+                    <th>保活台数</th>
                     {{ sort_link('keepalive', '保活') }}
                     {{ sort_link('interval', '间隔') }}
+                    <th>到期时间</th>
                     {{ sort_link('last', '最近保活') }}
                     <th>操作</th>
                 </tr>
@@ -38,6 +40,7 @@
                         {% endif %}
                     </td>
                     <td>{{ a.vm_count }} 台</td>
+                    <td>{{ a.vm_keepalive_count }}/{{ a.vm_count }}</td>
                     <td>
                         {% if a.keepalive_enabled %}
                         <span class="badge badge-on">开启</span>
@@ -51,6 +54,13 @@
                         {% endfor %}
                     </td>
                     <td>
+                        {% if a.expire_at %}
+                        <small class="{{ 'text-danger fw-bold' if a.expire_at[:10] < now_date else 'text-success' }}">{{ a.expire_at[:10] }}</small>
+                        {% else %}
+                        <small class="text-success">永久</small>
+                        {% endif %}
+                    </td>
+                    <td>
                         {% if a.last_keepalive_at %}
                         <small>{{ a.last_keepalive_at[:16] }}
                             {% if a.last_keepalive_status == 'success' %}✅{% else %}❌{% endif %}
@@ -58,10 +68,23 @@
                         {% else %}<small class="text-muted">未执行</small>{% endif %}
                     </td>
                     <td>
+                        <form method="POST" action="{{ url_for('main.set_expire', aid=a.id) }}" class="d-inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <select name="expire_type" class="form-select form-select-sm d-inline-block" style="width:auto;font-size:12px"
+                                    onchange="if(this.value==='custom'){this.nextElementSibling.style.display='inline-block'}else{this.nextElementSibling.style.display='none';this.form.submit()}">
+                                <option value="" disabled selected>⏰ 到期</option>
+                                <option value="never">永不过期</option>
+                                <option value="1d">+1天</option>
+                                <option value="1w">+1周</option>
+                                <option value="1m">+1月</option>
+                                <option value="1y">+1年</option>
+                                <option value="custom">自定义</option>
+                            </select><input type="date" name="custom_date" class="form-control form-control-sm d-inline-block" style="width:130px;display:none!important;font-size:12px" onchange="this.form.submit()">
+                        </form>
                         <button class="btn btn-sm btn-outline-success"
                                 data-url="{{ url_for('main.keepalive_now', aid=a.id) }}"
-                                onclick="doKeepaliveAll(this)">⚡ 保活</button>
-                        <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal{{ a.id }}">✏️ 修改</button>
+                                onclick="doKeepaliveAll(this)">⚡</button>
+                        <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal{{ a.id }}">✏️</button>
                         <a href="{{ url_for('main.account_detail', aid=a.id) }}" class="btn btn-sm btn-outline-primary">详情</a>
                         <form method="POST" action="{{ url_for('main.delete_account', aid=a.id) }}" class="d-inline"
                               onsubmit="return confirm('确定删除 ' + {{ a.username|tojson }} + '？')">
@@ -72,7 +95,7 @@
                 </tr>
             {% endfor %}
             {% if not accounts %}
-                <tr><td colspan="6" class="text-center text-muted py-4">暂无账号，点击右上角添加</td></tr>
+                <tr><td colspan="8" class="text-center text-muted py-4">暂无账号，点击右上角添加</td></tr>
             {% endif %}
             </tbody>
         </table>

@@ -34,10 +34,13 @@ def index():
     }
     sort_col = allowed_sorts.get(sort, "a.id")
     order_dir = "DESC" if order == "desc" else "ASC"
-    accounts = db.execute(
-        f"SELECT a.*, (SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id) as vm_count "
+    accounts_raw = db.execute(
+        f"SELECT a.*, "
+        f"(SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id) as vm_count, "
+        f"(SELECT COUNT(*) FROM cloud_vm WHERE account_id=a.id AND keepalive_enabled=1) as vm_keepalive_count "
         f"FROM cloud_account a ORDER BY {sort_col} {order_dir}"
     ).fetchall()
+    accounts = [dict(a) for a in accounts_raw]
     return render_template("accounts.html", accounts=accounts, intervals=INTERVAL_OPTIONS,
                            current_sort=sort, current_order=order,
                            now_date=datetime.now().strftime("%Y-%m-%d"))
