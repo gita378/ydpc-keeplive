@@ -31,7 +31,12 @@
             <tbody>
             {% for a in accounts %}
                 <tr>
-                    <td><strong>{{ a.username }}</strong></td>
+                    <td>
+                        <strong>{{ a.username }}</strong>
+                        {% if a.expire_at %}
+                        <br><small class="{{ 'text-danger' if a.expire_at[:10] < now_date else 'text-muted' }}">到期: {{ a.expire_at[:10] }}</small>
+                        {% endif %}
+                    </td>
                     <td>{{ a.vm_count }} 台</td>
                     <td>
                         {% if a.keepalive_enabled %}

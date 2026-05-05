@@ -298,16 +298,22 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
         )
 
 
-def keepalive_account(username: str, password: str, hold: int = 10, timeout: int = 10) -> tuple:
+def keepalive_account(username: str, password: str, hold: int = 10, timeout: int = 10,
+                      skip_usids: set = None) -> tuple:
     """对一个账号下所有云电脑做保活，返回 (results, fresh_vms)
-    fresh_vms 是保活后重新拉取的最新 VM 列表（含 vmStatusShow/remainDurationTime）
+    skip_usids: 跳过这些 userServiceId 的 VM（单台关闭保活）
     """
     results = []
     fresh_vms = []
+    skip_usids = skip_usids or set()
     try:
         client = soho_login(username, password, timeout=timeout)
         vms = fetch_vm_list(client)
         for vm in vms:
+            usid = int(vm.get("userServiceId", 0))
+            if usid in skip_usids:
+                LOG.info("[%s] %s 已关闭保活，跳过", username, vm.get("vmName", "?"))
+                continue
             r = keepalive_single_vm(client, vm, hold=hold, timeout=timeout)
             results.append(r)
         # 保活完成后重新拉一次列表，刷新状态和剩余时长

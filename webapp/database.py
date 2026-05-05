@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS cloud_account (
     last_login_at TIMESTAMP,
     last_keepalive_at TIMESTAMP,
     last_keepalive_status TEXT,
+    expire_at TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS cloud_vm (
     cpu TEXT,
     memory TEXT,
     raw_json TEXT,
+    keepalive_enabled INTEGER DEFAULT 1,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -73,6 +75,8 @@ def _migrate(db):
     migrations = [
         ("keepalive_log", "vm_status", "TEXT"),
         ("keepalive_log", "remain_duration_time", "TEXT"),
+        ("cloud_account", "expire_at", "TEXT"),
+        ("cloud_vm", "keepalive_enabled", "INTEGER DEFAULT 1"),
     ]
     for table, col, col_type in migrations:
         existing = [r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]

@@ -60,7 +60,25 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-outline-info">🔄 刷新列表</button>
         </form>
+        <form method="POST" action="{{ url_for('main.set_expire', aid=account.id) }}" class="d-flex gap-2 align-items-center">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <select name="expire_type" class="form-select form-select-sm" style="width:auto" onchange="this.form.querySelector('.custom-date').style.display = this.value === 'custom' ? 'inline-block' : 'none'">
+                <option value="never" {{ 'selected' if not account.expire_at }}>永不过期</option>
+                <option value="1d">1 天</option>
+                <option value="1w">1 周</option>
+                <option value="1m">1 个月</option>
+                <option value="1y">1 年</option>
+                <option value="custom">自定义日期</option>
+            </select>
+            <input type="date" name="custom_date" class="form-control form-control-sm custom-date" style="width:auto;display:none">
+            <button class="btn btn-sm btn-outline-secondary">设置到期</button>
+        </form>
         <div class="ms-auto text-muted small">
+            {% if account.expire_at %}
+            <span class="badge {{ 'bg-danger' if account.expire_at[:10] < now_date else 'bg-info' }}">
+                到期: {{ account.expire_at[:10] }}
+            </span>
+            {% endif %}
             {% if account.last_keepalive_at %}
             最近: {{ account.last_keepalive_at[:16] }}
             {{ '✅' if account.last_keepalive_status == 'success' else '❌' }}
@@ -117,10 +135,16 @@
                         {{ hours }} 小时
                         {% endif %}
                     </td>
-                    <td>
+                    <td class="d-flex gap-1">
+                        <button class="btn btn-sm {{ 'btn-success' if vm.keepalive_enabled else 'btn-outline-secondary' }}"
+                                data-url="{{ url_for('main.toggle_vm_keepalive', aid=account.id, vmid=vm.id) }}"
+                                onclick="toggleVmKeepalive(this)"
+                                title="{{ '点击关闭' if vm.keepalive_enabled else '点击开启' }}">
+                            {{ '🟢 保活中' if vm.keepalive_enabled else '⚪ 已关闭' }}
+                        </button>
                         <button class="btn btn-sm btn-outline-success btn-keepalive"
                                 data-url="{{ url_for('main.keepalive_vm', aid=account.id, vmid=vm.id) }}"
-                                onclick="doKeepalive(this)">⚡ 保活</button>
+                                onclick="doKeepalive(this)">⚡</button>
                     </td>
                 </tr>
             {% endfor %}
@@ -159,6 +183,23 @@
 </div>
 
 <script>
+function toggleVmKeepalive(btn) {
+    fetch(btn.dataset.url, {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => r.json())
+        .then(data => {
+            if (data.enabled) {
+                btn.className = 'btn btn-sm btn-success';
+                btn.textContent = '🟢 保活中';
+                btn.title = '点击关闭';
+            } else {
+                btn.className = 'btn btn-sm btn-outline-secondary';
+                btn.textContent = '⚪ 已关闭';
+                btn.title = '点击开启';
+            }
+        })
+        .catch(() => { btn.textContent = '❌ 错误'; });
+}
+
 function doKeepalive(btn) {
     const url = btn.dataset.url;
     const origText = btn.textContent;

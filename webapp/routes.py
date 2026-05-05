@@ -39,7 +39,8 @@ def index():
         f"FROM cloud_account a ORDER BY {sort_col} {order_dir}"
     ).fetchall()
     return render_template("accounts.html", accounts=accounts, intervals=INTERVAL_OPTIONS,
-                           current_sort=sort, current_order=order)
+                           current_sort=sort, current_order=order,
+                           now_date=datetime.now().strftime("%Y-%m-%d"))
 
 
 @main_bp.route("/accounts/add", methods=["POST"])
@@ -133,7 +134,8 @@ def account_detail(aid):
     logs = db.execute(
         "SELECT * FROM keepalive_log WHERE account_id=? ORDER BY executed_at DESC LIMIT 20", (aid,)
     ).fetchall()
-    return render_template("account_detail.html", account=account, vms=vms, logs=logs, intervals=INTERVAL_OPTIONS)
+    return render_template("account_detail.html", account=account, vms=vms, logs=logs,
+                           intervals=INTERVAL_OPTIONS, now_date=datetime.now().strftime("%Y-%m-%d"))
 
 
 @main_bp.route("/accounts/<int:aid>/edit", methods=["POST"])
@@ -233,6 +235,52 @@ def set_interval(aid):
     reschedule_job(aid, interval)
     flash(f"间隔已设为 {interval // 60} 分钟", "success")
     return redirect(url_for("main.account_detail", aid=aid))
+
+
+@main_bp.route("/accounts/<int:aid>/expire", methods=["POST"])
+@login_required
+def set_expire(aid):
+    db = get_db()
+    expire_type = request.form.get("expire_type", "")
+    custom_date = request.form.get("custom_date", "").strip()
+
+    if expire_type == "never":
+        expire_at = None
+    elif expire_type == "custom" and custom_date:
+        expire_at = custom_date + "T23:59:59"
+    elif expire_type:
+        from datetime import datetime, timedelta
+        days_map = {"1d": 1, "1w": 7, "1m": 30, "1y": 365}
+        days = days_map.get(expire_type, 0)
+        if days:
+            expire_at = (datetime.now() + timedelta(days=days)).isoformat()
+        else:
+            expire_at = None
+    else:
+        expire_at = None
+
+    db.execute("UPDATE cloud_account SET expire_at=? WHERE id=?", (expire_at, aid))
+    db.commit()
+    if expire_at:
+        flash(f"到期时间设为 {expire_at[:10]}", "success")
+    else:
+        flash("已设为永不过期", "success")
+    return redirect(url_for("main.account_detail", aid=aid))
+
+
+@main_bp.route("/accounts/<int:aid>/vm/<int:vmid>/toggle-keepalive", methods=["POST"])
+@login_required
+def toggle_vm_keepalive(aid, vmid):
+    from flask import jsonify
+    db = get_db()
+    vm = db.execute("SELECT * FROM cloud_vm WHERE id=? AND account_id=?", (vmid, aid)).fetchone()
+    if not vm:
+        return jsonify({"success": False, "msg": "云电脑不存在"}), 404
+    new_state = 0 if vm["keepalive_enabled"] else 1
+    db.execute("UPDATE cloud_vm SET keepalive_enabled=? WHERE id=?", (new_state, vmid))
+    db.commit()
+    return jsonify({"success": True, "enabled": bool(new_state),
+                    "msg": f"{vm['vm_name']}: {'开启' if new_state else '关闭'}保活"})
 
 
 @main_bp.route("/accounts/<int:aid>/vm/<int:vmid>/keepalive", methods=["POST"])

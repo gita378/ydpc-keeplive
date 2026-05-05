@@ -13,8 +13,28 @@ scheduler = BackgroundScheduler(daemon=True, job_defaults={"coalesce": True, "ma
 def _run_keepalive(account_id: int, username: str, password: str, db_path: str, hold: int = 10):
     """后台任务：执行保活并写日志 + 刷新 VM 状态到数据库"""
     LOG.info("[%s] 执行保活", username)
+    # 检查是否到期
+    conn_check = sqlite3.connect(db_path)
+    row = conn_check.execute("SELECT expire_at FROM cloud_account WHERE id=?", (account_id,)).fetchone()
+    conn_check.close()
+    if row and row[0]:
+        from datetime import datetime as _dt
+        try:
+            expire = _dt.fromisoformat(row[0])
+            if _dt.now() > expire:
+                LOG.info("[%s] 账号已到期(%s)，跳过保活", username, row[0][:10])
+                return
+        except Exception:
+            pass
+    # 查询哪些 VM 需要保活
+    conn_vm = sqlite3.connect(db_path)
+    disabled_usids = set()
+    for row in conn_vm.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (account_id,)).fetchall():
+        disabled_usids.add(row[0])
+    conn_vm.close()
+
     try:
-        results, fresh_vms = keepalive_account(username, password, hold=hold)
+        results, fresh_vms = keepalive_account(username, password, hold=hold, skip_usids=disabled_usids)
     except Exception as e:
         LOG.error("[%s] 保活异常: %s", username, e)
         conn = sqlite3.connect(db_path)
@@ -40,6 +60,7 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
         if fresh_vms:
             for vm in fresh_vms:
                 vm_map[int(vm.get("userServiceId", 0))] = vm
+                # 同步更新 VM 的 keepalive_enabled 不影响（保持原值）
         for r in results:
             vm_info = vm_map.get(r.user_service_id, {})
             remain = vm_info.get("remainDurationTime")
