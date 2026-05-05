@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS keepalive_log (
     vm_status TEXT,
     remain_duration_time TEXT,
     error_message TEXT,
-    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    executed_at TIMESTAMP DEFAULT (datetime('now','localtime'))
 );
 """
 
@@ -68,10 +68,23 @@ def close_db(e=None):
         db.close()
 
 
+def _migrate(db):
+    """自动添加缺失的列，不用删库"""
+    migrations = [
+        ("keepalive_log", "vm_status", "TEXT"),
+        ("keepalive_log", "remain_duration_time", "TEXT"),
+    ]
+    for table, col, col_type in migrations:
+        existing = [r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]
+        if col not in existing:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+
+
 def init_db(app):
     with app.app_context():
         db = sqlite3.connect(app.config["DATABASE"])
         db.executescript(SCHEMA)
+        _migrate(db)
         # 创建默认管理员
         from werkzeug.security import generate_password_hash
 

@@ -13,11 +13,27 @@ scheduler = BackgroundScheduler(daemon=True, job_defaults={"coalesce": True, "ma
 def _run_keepalive(account_id: int, username: str, password: str, db_path: str, hold: int = 10):
     """后台任务：执行保活并写日志 + 刷新 VM 状态到数据库"""
     LOG.info("[%s] 执行保活", username)
-    results, fresh_vms = keepalive_account(username, password, hold=hold)
+    try:
+        results, fresh_vms = keepalive_account(username, password, hold=hold)
+    except Exception as e:
+        LOG.error("[%s] 保活异常: %s", username, e)
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(
+            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, error_message) VALUES (?, ?, 0, 'failed', ?)",
+            (account_id, "SYSTEM", str(e)))
+        conn.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status='failed' WHERE id=?",
+                     (datetime.now().isoformat(), account_id))
+        conn.commit()
+        conn.close()
+        return
     now = datetime.now().isoformat()
     status_summary = "success" if all(r.success for r in results) else "failed"
 
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         # 建 usid → VM 状态映射
         vm_map = {}
