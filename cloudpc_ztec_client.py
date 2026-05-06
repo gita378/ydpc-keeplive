@@ -427,6 +427,13 @@ print(json.dumps(out))
     )
 
 
+_HARDCODED_ZTE_KEYS = ZteCryptoKeys(
+    csap_key=bytes.fromhex("33666563386135342d376534392d3438"),
+    uas_key=bytes.fromhex("3536416366346333343938664434633561304231666232363934376532646142"),
+    uas_iv=bytes.fromhex("33343938664434633561304231666241"),
+)
+
+
 def load_zte_crypto_keys(
     *,
     csap_key: Optional[str] = None,
@@ -443,11 +450,11 @@ def load_zte_crypto_keys(
             uas_iv=_decode_key_arg(uas_iv),
         )
     if installinfo and frameworks_dir and macos_dir:
-        return _decrypt_installinfo_keys_with_clientped(installinfo, frameworks_dir, macos_dir)
-    raise ValueError(
-        "ZTE crypto keys required: pass --zte-csap-key/--zte-uas-key/--zte-uas-iv "
-        "or --zte-installinfo/--zte-frameworks-dir/--zte-macos-dir"
-    )
+        try:
+            return _decrypt_installinfo_keys_with_clientped(installinfo, frameworks_dir, macos_dir)
+        except Exception:
+            pass
+    return _HARDCODED_ZTE_KEYS
 
 
 def zte_csap_percent_encode(value: str) -> str:

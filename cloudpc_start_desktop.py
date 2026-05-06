@@ -21,10 +21,6 @@ from cloudpc_ztec_client import (
     load_zte_crypto_keys,
 )
 
-ZTE_APP = Path(
-    "/Applications/移动云电脑.app/Contents/Resources/app.asar.unpacked"
-    "/node_modules/chuanyunAddOn-zte/ccsdk/mac/uSmartView_VDI_Client.app/Contents"
-)
 
 
 def boot_vm(
@@ -40,11 +36,7 @@ def boot_vm(
     print(f"    CAG={auth.cag_host}:{auth.cag_port} VMC={auth.vmc_host}:{auth.vmc_port}")
     print(f"    vmId={auth.vm_id}")
 
-    keys = load_zte_crypto_keys(
-        installinfo=ZTE_APP / "config" / "installinfo.ini",
-        frameworks_dir=ZTE_APP / "Frameworks",
-        macos_dir=ZTE_APP / "MacOS",
-    )
+    keys = load_zte_crypto_keys()
 
     csap = ZteCsapClient(auth, keys, timeout=30.0, verify_tls=False)
     print(f"[*] CSAP 开始 (trace={csap.trace_id[:12]}...)")
