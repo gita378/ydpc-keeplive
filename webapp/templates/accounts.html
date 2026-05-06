@@ -245,8 +245,8 @@ function doKeepaliveAll(btn) {
     btn.classList.remove('btn-outline-success', 'btn-outline-danger');
     btn.classList.add('btn-secondary');
 
-    fetch(url, {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}})
-        .then(r => r.json())
+    fetch(url, {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken}})
+        .then(r => { if(!r.ok) throw new Error(r.status); return r.json(); })
         .then(data => {
             btn.disabled = false;
             btn.textContent = data.success ? '✅ 成功' : '❌ 失败';
