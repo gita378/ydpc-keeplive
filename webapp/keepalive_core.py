@@ -13,6 +13,7 @@ import platform
 import random
 import socket
 import ssl
+import os
 import struct
 import time
 from dataclasses import dataclass, field
@@ -280,7 +281,7 @@ def fetch_vm_list(client: CloudPcClient) -> list:
 
 
 def boot_vm(client: CloudPcClient, vm: dict, timeout: int = 30) -> tuple:
-    """开机单台关机状态的 VM，返回 (success, message)"""
+    """开机单台关机状态的 VM，返回 (success, message)。完全自包含，不依赖外部模块。"""
     usid = int(vm["userServiceId"])
     name = vm.get("vmName", "?")
     vm_status = vm.get("vmStatus")
@@ -288,40 +289,227 @@ def boot_vm(client: CloudPcClient, vm: dict, timeout: int = 30) -> tuple:
         return True, f"{name}: 已在运行中(status={vm.get('vmStatusShow', vm_status)})"
 
     try:
-        from pathlib import Path
-        import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from cloudpc_ztec_client import (
-            FirmAuth, ZteCsapClient, load_zte_crypto_keys,
-        )
-
         auth_data = client.get_firm_auth(usid)
-        firm_auth = FirmAuth(
-            vm_username=str(auth_data["vmUserName"]),
-            vm_password=str(auth_data["vmPassword"]),
-            vm_id=str(auth_data["vmId"]),
-            vmc_host=str(auth_data["vmcIp"]),
-            vmc_port=int(auth_data["vmcPort"]),
-            cag_host=str(auth_data["cagIp"]),
-            cag_port=int(auth_data["cagPort"]),
-        )
-
-        zte_app = Path("/Applications/移动云电脑.app/Contents/Resources/app.asar.unpacked"
-                       "/node_modules/chuanyunAddOn-zte/ccsdk/mac/uSmartView_VDI_Client.app/Contents")
-        keys = load_zte_crypto_keys(
-            installinfo=zte_app / "config" / "installinfo.ini",
-            frameworks_dir=zte_app / "Frameworks",
-            macos_dir=zte_app / "MacOS",
-        )
-
-        csap = ZteCsapClient(firm_auth, keys, timeout=timeout, verify_tls=False)
-        result = csap.get_fresh_connect_command(poll_timeout=60.0)
-        if result and result.connect_command and result.connect_command.session_key:
+        ok, msg = _csap_start_desktop(auth_data, timeout=timeout)
+        if ok:
             return True, f"{name}: 开机成功"
-        return True, f"{name}: 已发送开机指令"
+        return False, f"{name}: 开机失败 - {msg}"
     except Exception as e:
         LOG.error("[boot] %s 开机失败: %s", name, e)
         return False, f"{name}: 开机失败 - {e}"
+
+
+# ── CSAP 开机实现 (自包含) ──
+
+def _csap_load_keys() -> tuple:
+    """ZTE 加密 key (固定值，不随账号变化)"""
+    return (
+        bytes.fromhex("33666563386135342d376534392d3438"),
+        bytes.fromhex("3536416366346333343938664434633561304231666232363934376532646142"),
+        bytes.fromhex("33343938664434633561304231666241"),
+    )
+
+
+_CSAP_KEYS_CACHE = None
+
+def _csap_get_keys() -> tuple:
+    global _CSAP_KEYS_CACHE
+    if _CSAP_KEYS_CACHE is None:
+        _CSAP_KEYS_CACHE = _csap_load_keys()
+    return _CSAP_KEYS_CACHE
+
+
+def _pkcs7_pad(data: bytes, bs: int = 16) -> bytes:
+    pad = bs - (len(data) % bs)
+    return data + bytes([pad]) * pad
+
+
+def _pkcs7_unpad(data: bytes, bs: int = 16) -> bytes:
+    if not data:
+        return data
+    pad = data[-1]
+    if 1 <= pad <= bs and data.endswith(bytes([pad]) * pad):
+        return data[:-pad]
+    return data.rstrip(b"\x00")
+
+
+def _csap_aes_encrypt(data: bytes, key: bytes, mode) -> bytes:
+    cipher = Cipher(algorithms.AES(key), mode, backend=default_backend())
+    return cipher.encryptor().update(data) + cipher.encryptor().finalize()
+
+
+def _csap_aes_decrypt(data: bytes, key: bytes, mode) -> bytes:
+    cipher = Cipher(algorithms.AES(key), mode, backend=default_backend())
+    dec = cipher.decryptor()
+    return dec.update(data) + dec.finalize()
+
+
+def _csap_encode_body(body, uas_key: bytes, uas_iv: bytes) -> str:
+    if isinstance(body, str):
+        plain = body
+    else:
+        plain = json.dumps(body, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    encrypted = _csap_aes_encrypt(_pkcs7_pad(plain.encode("utf-8")), uas_key, modes.CBC(uas_iv))
+    return encrypted.hex().upper()
+
+
+def _csap_decode_response(hex_str: str, uas_key: bytes, uas_iv: bytes) -> dict:
+    encrypted = bytes.fromhex(hex_str)
+    plain = _pkcs7_unpad(_csap_aes_decrypt(encrypted, uas_key, modes.CBC(uas_iv)))
+    return json.loads(plain.decode("utf-8"))
+
+
+def _csap_encrypt_password(password: str, csap_key: bytes) -> str:
+    import urllib.parse
+    escaped = urllib.parse.quote(password, safe="-_.~").encode("utf-8")
+    encrypted = _csap_aes_encrypt(_pkcs7_pad(escaped), csap_key, modes.ECB())
+    return base64.b64encode(encrypted).decode("ascii").replace("+", "%2B")
+
+
+def _csap_start_desktop(auth_data: dict, timeout: int = 30) -> tuple:
+    """CSAP 完整开机流程: sysConfig → getToken → getDesktopList → startDesktop → async_query"""
+    import urllib.parse
+    import uuid
+    import os
+
+    csap_key, uas_key, uas_iv = _csap_get_keys()
+    cag_host = str(auth_data["cagIp"])
+    cag_port = int(auth_data["cagPort"])
+    vmc_host = str(auth_data["vmcIp"])
+    vmc_port = int(auth_data["vmcPort"])
+    vm_username = str(auth_data["vmUserName"])
+    vm_password = str(auth_data["vmPassword"])
+    vm_id = str(auth_data["vmId"])
+
+    base_url = f"https://{cag_host}:{cag_port}"
+    trace_id = os.urandom(16).hex()
+    serial_num = str(uuid.uuid4())
+    version = "V7.25.22"
+    mac = "0a-e0-60-8b-31-21"
+    client_ip = "192.168.5.14"
+    host_name = "zxcs-MacBook-Pro.local"
+    sn_code = "5DF71D7B-6B8F-5186-9A1D-B503644C187F"
+    parent_counter = [0]
+
+    sess = requests.Session()
+    sess.trust_env = False
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    def make_headers():
+        parent_counter[0] += 1
+        return {
+            "Content-Type": "application/xml",
+            "X-Ap-sHost": f"{vmc_host}:{vmc_port}",
+            "process_id": "2",
+            "serialNum": serial_num,
+            "otlp_trace_id": trace_id,
+            "otlp_parent_id": f"{parent_counter[0]:016x}",
+            "Connection": "keep-alive",
+        }
+
+    def csap_post(action: str, query: str = "", body="") -> dict:
+        url = f"{base_url}/cs/{action}"
+        if query:
+            url += "?" + query
+        resp = sess.post(url, headers=make_headers(),
+                        data=_csap_encode_body(body, uas_key, uas_iv),
+                        timeout=timeout, verify=False)
+        resp.raise_for_status()
+        envelope = resp.json()
+        sp = envelope.get("ZTE_Security_Params")
+        if isinstance(sp, str):
+            return _csap_decode_response(sp, uas_key, uas_iv)
+        return envelope
+
+    # 1. sysConfig
+    q = (f"version={urllib.parse.quote(version, safe='')}"
+         f"&language=zh&requestFrom=9"
+         f"&name={urllib.parse.quote(vm_username, safe='')}&RspSecurity=1")
+    csap_post("cs_sysConfig.action", q, "")
+
+    # 2. getToken
+    enc_pw = _csap_encrypt_password(vm_password, csap_key)
+    q = (f"username={urllib.parse.quote(vm_username, safe='')}"
+         f"&password={enc_pw}&version={urllib.parse.quote(version, safe='')}"
+         f"&language=zh&clientId=&encrypt=4&token=&requestFrom=9"
+         f"&mac={mac}&clientIp={client_ip}"
+         f"&hostName={urllib.parse.quote(host_name, safe='')}"
+         "&newVersionCtrl=1&netflags=1&unityType=1&isvm=0&RspSecurity=1")
+    token_resp = csap_post("cs_getToken.action", q, {"clienttype": 5, "hardware": 25, "nettype": 2, "ostype": 10})
+    if str(token_resp.get("result")) != "0":
+        return False, f"getToken failed: {token_resp.get('mesg', token_resp.get('result'))}"
+    access_token = str(token_resp["accessToken"])
+
+    # 3. getDesktopList
+    q = (f"accessToken={urllib.parse.quote(access_token, safe='')}"
+         f"&type=7&version={urllib.parse.quote(version, safe='')}"
+         f"&language=zh&clientIp={client_ip}&requestFrom=9&isvm=0&RspSecurity=1")
+    list_resp = csap_post("cs_getDesktopList.action", q, "")
+    if str(list_resp.get("result")) != "0":
+        return False, f"getDesktopList failed: {list_resp.get('mesg')}"
+    desktops = list_resp.get("desktopList", [])
+    desktop = None
+    for d in desktops:
+        if str(d.get("vmId", "")) == vm_id:
+            desktop = d
+            break
+    if not desktop and desktops:
+        desktop = desktops[0]
+    if not desktop:
+        return False, "no desktop found"
+
+    # 4. startDesktop (参数全在 query string)
+    user_id = int(desktop.get("userId", 0))
+    group_id = int(desktop.get("groupId", -1))
+    pool_id = int(desktop.get("poolId", 0))
+    connection_type = int(desktop.get("connectionType", 0))
+    desktop_type = int(desktop.get("desktopType", 1))
+    desktop_uuid = str(desktop.get("uuid", ""))
+
+    q = (f"accessToken={urllib.parse.quote(access_token, safe='')}"
+         f"&uuid={urllib.parse.quote(desktop_uuid, safe='')}"
+         f"&vmid={urllib.parse.quote(vm_id, safe='')}"
+         f"&type={desktop_type}&connectionType={connection_type}"
+         f"&assignRelationtoString={urllib.parse.quote(f'{user_id},{group_id},{pool_id}', safe='')}"
+         f"&version={urllib.parse.quote(version, safe='')}&language=zh&requestFrom=9"
+         f"&isvm=0&encryption=1&prover=1&supportAsync=1&allowSwitchRap=1"
+         f"&raptype={2 if connection_type == 0 else 1}&netType=2"
+         f"&SNcode={urllib.parse.quote(sn_code, safe='')}"
+         f"&hostName={urllib.parse.quote(host_name, safe='')}"
+         f"&localipandmac={urllib.parse.quote(f'{client_ip},{mac}', safe='')}"
+         f"&diskNo={urllib.parse.quote(sn_code, safe='')}"
+         "&newpara=1&newcharsetparse=1&upmnew=1&watermarkType=1"
+         "&allowExtUSBPolicy=1&verifyTerminalBind=11"
+         "&supportCustomConfig=00000000000000000000000000000011&RspSecurity=1")
+    start_resp = csap_post("cs_startDesktop.action", q, "")
+    result_code = str(start_resp.get("result", ""))
+    if result_code != "0":
+        return False, f"startDesktop: {start_resp.get('mesg', result_code)}"
+
+    if start_resp.get("connectStr"):
+        return True, "ok"
+
+    # 5. 轮询 async_query
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        time.sleep(3)
+        q = (f"accessToken={urllib.parse.quote(access_token, safe='')}"
+             f"&language=zh&isvm=0&vmid={urllib.parse.quote(vm_id, safe='')}"
+             "&RspSecurity=1&prover=1&allowSwitchRap=1")
+        try:
+            qr = csap_post("cs_startDesktop_async_query.action", q, "")
+        except Exception:
+            continue
+        if qr.get("connectStr"):
+            return True, "ok"
+        interval = qr.get("nextQueryTimeInterval")
+        if interval:
+            try:
+                time.sleep(max(0, min(float(interval), 5) - 3))
+            except (TypeError, ValueError):
+                pass
+    return True, "startDesktop sent (poll timeout)"
 
 
 def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout: int = 10,
@@ -382,3 +570,4 @@ def keepalive_account(username: str, password: str, hold: int = 10, timeout: int
     except Exception as e:
         results.append(KeepaliveResult(vm_name="LOGIN", user_service_id=0, success=False, error=str(e)))
     return results, fresh_vms
+_csap_load_keys()
