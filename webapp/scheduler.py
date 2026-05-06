@@ -1,7 +1,14 @@
 """APScheduler 后台保活调度"""
 import sqlite3
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _now_cst() -> str:
+    """返回北京时间 ISO 格式字符串"""
+    return datetime.now(_CST).strftime("%Y-%m-%d %H:%M:%S")
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from keepalive_core import keepalive_account
@@ -21,7 +28,7 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
         from datetime import datetime as _dt
         try:
             expire = _dt.fromisoformat(row[0])
-            if _dt.now() > expire:
+            if _dt.now(_CST).replace(tzinfo=None) > expire:
                 LOG.info("[%s] 账号已到期(%s)，跳过保活", username, row[0][:10])
                 return
         except Exception:
@@ -41,14 +48,14 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
-            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, error_message) VALUES (?, ?, 0, 'failed', ?)",
-            (account_id, "SYSTEM", str(e)))
+            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, error_message, executed_at) VALUES (?, ?, 0, 'failed', ?, ?)",
+            (account_id, "SYSTEM", str(e), _now_cst()))
         conn.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status='failed' WHERE id=?",
-                     (datetime.now().isoformat(), account_id))
+                     (_now_cst(), account_id))
         conn.commit()
         conn.close()
         return
-    now = datetime.now().isoformat()
+    now = _now_cst()
     status_summary = "success" if all(r.success for r in results) else "failed"
 
     conn = sqlite3.connect(db_path)
@@ -66,13 +73,13 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
             remain = vm_info.get("remainDurationTime")
             conn.execute(
                 "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
-                "vm_status, remain_duration_time, error_message) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "vm_status, remain_duration_time, error_message, executed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (account_id, r.vm_name, r.user_service_id,
                  "success" if r.success else "failed", r.cag_code,
                  vm_info.get("vmStatusShow", ""),
                  str(remain) if remain is not None else None,
-                 r.error or None),
+                 r.error or None, now),
             )
         conn.execute(
             "UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",

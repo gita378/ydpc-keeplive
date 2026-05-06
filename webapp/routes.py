@@ -1,9 +1,15 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from database import get_db
 from auth import login_required
 from keepalive_core import soho_login, fetch_vm_list, keepalive_account, boot_vm
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _now_cst() -> str:
+    return datetime.now(_CST).strftime("%Y-%m-%d %H:%M:%S")
 from scheduler import add_job, remove_job, reschedule_job
 
 main_bp = Blueprint("main", __name__)
@@ -74,7 +80,7 @@ def add_account():
     # 写入数据库
     cur = db.execute(
         "INSERT INTO cloud_account (username, password, last_login_at) VALUES (?, ?, ?)",
-        (username, password, datetime.now().isoformat()),
+        (username, password, _now_cst()),
     )
     account_id = cur.lastrowid
 
@@ -205,7 +211,7 @@ def refresh_vms(aid):
     # 恢复保活开关
     for usid, ka in old_ka.items():
         db.execute("UPDATE cloud_vm SET keepalive_enabled=? WHERE account_id=? AND user_service_id=?", (ka, aid, usid))
-    db.execute("UPDATE cloud_account SET last_login_at=? WHERE id=?", (datetime.now().isoformat(), aid))
+    db.execute("UPDATE cloud_account SET last_login_at=? WHERE id=?", (_now_cst(), aid))
     db.commit()
     flash(f"刷新成功 ({len(vms)} 台)", "success")
     return redirect(url_for("main.account_detail", aid=aid))
@@ -371,12 +377,12 @@ def keepalive_vm(aid, vmid):
         client = soho_login(account["username"], account["password"])
         vm_dict = json.loads(vm_row["raw_json"]) if vm_row["raw_json"] else {"userServiceId": vm_row["user_service_id"], "vmName": vm_row["vm_name"]}
         result = keepalive_single_vm(client, vm_dict, hold=current_app.config.get("HOLD_SECONDS", 10))
-        now = datetime.now().isoformat()
+        now = _now_cst()
         db.execute(
-            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, error_message) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, error_message, executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (aid, result.vm_name, result.user_service_id,
-             "success" if result.success else "failed", result.cag_code, result.error or None),
+             "success" if result.success else "failed", result.cag_code, result.error or None, now),
         )
         db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",
                    (now, "success" if result.success else "failed", aid))
@@ -403,7 +409,7 @@ def keepalive_now(aid):
     results, fresh_vms = keepalive_account(account["username"], account["password"],
                                            hold=current_app.config.get("HOLD_SECONDS", 10),
                                            skip_usids=disabled)
-    now = datetime.now().isoformat()
+    now = _now_cst()
     status = "success" if all(r.success for r in results) else "failed"
     # 刷新 VM 状态
     if fresh_vms:
@@ -423,12 +429,12 @@ def keepalive_now(aid):
         remain = vm_info.get("remainDurationTime")
         db.execute(
             "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
-            "vm_status, remain_duration_time, error_message) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "vm_status, remain_duration_time, error_message, executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (aid, r.vm_name, r.user_service_id, "success" if r.success else "failed", r.cag_code,
              vm_info.get("vmStatusShow", ""),
              str(remain) if remain is not None else None,
-             r.error or None),
+             r.error or None, now),
         )
     db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
     db.commit()
