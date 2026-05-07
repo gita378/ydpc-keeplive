@@ -101,11 +101,33 @@
                         {% else %}<small class="text-muted">未执行</small>{% endif %}
                     </td>
                     <td class="text-nowrap">
+                        <span class="d-inline-flex align-items-center gap-1">
+                            <select class="form-select form-select-sm" style="width:auto;font-size:12px"
+                                    data-url="{{ url_for('main.set_expire', aid=a.id) }}"
+                                    onchange="setExpire(this)">
+                                <option value="" disabled selected>⏰ 到期</option>
+                                <option value="never">永不过期</option>
+                                <option value="1d">+1天</option>
+                                <option value="1w">+1周</option>
+                                <option value="1m">+1月</option>
+                                <option value="1y">+1年</option>
+                                <option value="custom">自定义</option>
+                            </select>
+                            <input type="date" class="form-control form-control-sm custom-expire-date" style="width:130px;display:none;font-size:12px"
+                                   data-url="{{ url_for('main.set_expire', aid=a.id) }}"
+                                   onchange="setExpireCustom(this)">
+                        </span>
                         <button class="btn btn-sm btn-outline-success" data-url="{{ url_for('main.keepalive_now', aid=a.id) }}" onclick="doSingle(this,'⚡')">⚡</button>
                         {% if a.vm_off > 0 %}
                         <button class="btn btn-sm btn-primary" data-url="{{ url_for('main.boot_all_vms', aid=a.id) }}" onclick="doSingle(this,'🖥')">🖥</button>
                         {% endif %}
+                        <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal{{ a.id }}">✏️</button>
                         <a href="{{ url_for('main.account_detail', aid=a.id) }}" class="btn btn-sm btn-outline-primary">详情</a>
+                        <form method="POST" action="{{ url_for('main.delete_account', aid=a.id) }}" class="d-inline"
+                              onsubmit="return confirm('确定删除 ' + {{ a.username|tojson }} + '？')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="btn btn-sm btn-outline-danger">删除</button>
+                        </form>
                     </td>
                 </tr>
             {% endfor %}
@@ -116,6 +138,41 @@
         </table>
     </div>
 </div>
+
+<!-- 修改账号 Modal -->
+{% for a in accounts %}
+<div class="modal fade" id="editModal{{ a.id }}" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.edit_account', aid=a.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="modal-header">
+                    <h5 class="modal-title">修改账号: {{ a.username }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">SOHO 账号</label>
+                        <input type="text" name="username" class="form-control" value="{{ a.username }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">密码</label>
+                        <div class="input-group">
+                            <input type="password" name="password" class="form-control" placeholder="输入新密码" required>
+                            <button type="button" class="btn btn-outline-secondary toggle-pwd">👁</button>
+                        </div>
+                    </div>
+                    <p class="text-muted small">保存时会验证账号密码是否正确</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存并验证</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
 
 <!-- 添加账号 Modal -->
 <div class="modal fade" id="addModal" tabindex="-1">
@@ -247,6 +304,36 @@ function doSingle(btn, orig) {
         .catch(()=>{
             btn.disabled=false; btn.textContent='❌';
             setTimeout(()=>{btn.textContent=orig;},3000);
+        });
+}
+
+/* ── 到期设置 ── */
+function setExpire(sel) {
+    const url = sel.dataset.url;
+    const val = sel.value;
+    if (val === 'custom') {
+        sel.parentElement.querySelector('.custom-expire-date').style.display = 'inline-block';
+        sel.selectedIndex = 0;
+        return;
+    }
+    const body = new URLSearchParams({expire_type: val});
+    fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded','X-CSRFToken':csrfToken}, body})
+        .then(r => r.json())
+        .then(data => {
+            const cell = sel.closest('tr').querySelector('.expire-cell');
+            if (cell) cell.innerHTML = data.expire_at ? `<small class="text-success">${data.expire_at}</small>` : '<small class="text-success">永久</small>';
+            sel.selectedIndex = 0;
+        });
+}
+function setExpireCustom(input) {
+    const url = input.dataset.url;
+    const body = new URLSearchParams({expire_type:'custom', custom_date: input.value});
+    fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded','X-CSRFToken':csrfToken}, body})
+        .then(r => r.json())
+        .then(data => {
+            const cell = input.closest('tr').querySelector('.expire-cell');
+            if (cell) cell.innerHTML = data.expire_at ? `<small class="text-success">${data.expire_at}</small>` : '<small class="text-success">永久</small>';
+            input.style.display = 'none';
         });
 }
 </script>
