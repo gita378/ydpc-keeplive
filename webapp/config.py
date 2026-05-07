@@ -13,6 +13,7 @@ else:
     _secret = os.urandom(32).hex()
     with open(_key_file, "w") as f:
         f.write(_secret)
+    os.chmod(_key_file, 0o600)
 
 
 class Config:

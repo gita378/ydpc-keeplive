@@ -37,7 +37,7 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
     conn_vm = sqlite3.connect(db_path)
     disabled_usids = set()
     for row in conn_vm.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (account_id,)).fetchall():
-        disabled_usids.add(row[0])
+        disabled_usids.add(int(row[0]))
     conn_vm.close()
 
     try:

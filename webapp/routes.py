@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, jsonify
 from database import get_db
 from auth import login_required
 from keepalive_core import soho_login, fetch_vm_list, keepalive_account, boot_vm
@@ -53,7 +53,7 @@ def index():
     accounts = [dict(a) for a in accounts_raw]
     return render_template("accounts.html", accounts=accounts, intervals=INTERVAL_OPTIONS,
                            current_sort=sort, current_order=order,
-                           now_date=datetime.now().strftime("%Y-%m-%d"))
+                           now_date=datetime.now(_CST).strftime("%Y-%m-%d"))
 
 
 @main_bp.route("/accounts/add", methods=["POST"])
@@ -263,7 +263,7 @@ def set_interval(aid):
 @main_bp.route("/accounts/<int:aid>/expire", methods=["POST"])
 @login_required
 def set_expire(aid):
-    from flask import jsonify
+
     from datetime import timedelta
     db = get_db()
     expire_type = request.form.get("expire_type", "")
@@ -276,7 +276,7 @@ def set_expire(aid):
     elif expire_type:
         days_map = {"1d": 1, "1w": 7, "1m": 30, "1y": 365}
         days = days_map.get(expire_type, 0)
-        expire_at = (datetime.now() + timedelta(days=days)).isoformat() if days else None
+        expire_at = (datetime.now(_CST) + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S") if days else None
     else:
         expire_at = None
 
@@ -295,7 +295,7 @@ def set_expire(aid):
 @main_bp.route("/accounts/<int:aid>/vm/<int:vmid>/toggle-keepalive", methods=["POST"])
 @login_required
 def toggle_vm_keepalive(aid, vmid):
-    from flask import jsonify
+
     db = get_db()
     vm = db.execute("SELECT * FROM cloud_vm WHERE id=? AND account_id=?", (vmid, aid)).fetchone()
     if not vm:
@@ -311,7 +311,7 @@ def toggle_vm_keepalive(aid, vmid):
 @login_required
 def boot_vm_route(aid, vmid):
     """单台云电脑开机"""
-    from flask import jsonify
+
     db = get_db()
     account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
     vm_row = db.execute("SELECT * FROM cloud_vm WHERE id=? AND account_id=?", (vmid, aid)).fetchone()
@@ -336,7 +336,7 @@ def boot_vm_route(aid, vmid):
 @login_required
 def boot_all_vms(aid):
     """账号下所有关机 VM 全部开机"""
-    from flask import jsonify
+
     db = get_db()
     account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
     if not account:
@@ -368,7 +368,7 @@ def boot_all_vms(aid):
 @login_required
 def keepalive_vm(aid, vmid):
     """单台云电脑保活（支持 AJAX）"""
-    from flask import jsonify
+
     db = get_db()
     account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
     vm_row = db.execute("SELECT * FROM cloud_vm WHERE id=? AND account_id=?", (vmid, aid)).fetchone()
@@ -398,7 +398,7 @@ def keepalive_vm(aid, vmid):
 @main_bp.route("/accounts/<int:aid>/keepalive-now", methods=["POST"])
 @login_required
 def keepalive_now(aid):
-    from flask import jsonify
+
     db = get_db()
     account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
     if not account:
@@ -452,7 +452,7 @@ def keepalive_now(aid):
 @main_bp.route("/accounts/<int:aid>/remark", methods=["POST"])
 @login_required
 def set_remark(aid):
-    from flask import jsonify
+
     remark = request.form.get("remark", "").strip()
     db = get_db()
     db.execute("UPDATE cloud_account SET remark=? WHERE id=?", (remark, aid))
@@ -464,10 +464,13 @@ def set_remark(aid):
 @login_required
 def batch_action():
     """批量操作: action=keepalive|boot|delete|remark|expire, ids=[1,2,3]"""
-    from flask import jsonify
+
     data = request.get_json(silent=True) or {}
     action = data.get("action", "")
-    ids = data.get("ids", [])
+    try:
+        ids = [int(i) for i in data.get("ids", [])]
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "msg": "ids 参数格式错误"}), 400
     if not ids or not action:
         return jsonify({"success": False, "msg": "参数缺失"}), 400
 

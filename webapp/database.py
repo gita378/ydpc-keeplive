@@ -90,6 +90,7 @@ def init_db(app):
     with app.app_context():
         db = sqlite3.connect(app.config["DATABASE"])
         db.executescript(SCHEMA)
+        db.execute("CREATE INDEX IF NOT EXISTS idx_log_account_time ON keepalive_log(account_id, executed_at DESC)")
         _migrate(db)
         # 创建默认管理员
         from werkzeug.security import generate_password_hash

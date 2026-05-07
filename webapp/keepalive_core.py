@@ -335,7 +335,8 @@ def _pkcs7_unpad(data: bytes, bs: int = 16) -> bytes:
 
 def _csap_aes_encrypt(data: bytes, key: bytes, mode) -> bytes:
     cipher = Cipher(algorithms.AES(key), mode, backend=default_backend())
-    return cipher.encryptor().update(data) + cipher.encryptor().finalize()
+    enc = cipher.encryptor()
+    return enc.update(data) + enc.finalize()
 
 
 def _csap_aes_decrypt(data: bytes, key: bytes, mode) -> bytes:
@@ -570,4 +571,3 @@ def keepalive_account(username: str, password: str, hold: int = 10, timeout: int
     except Exception as e:
         results.append(KeepaliveResult(vm_name="LOGIN", user_service_id=0, success=False, error=str(e)))
     return results, fresh_vms
-_csap_load_keys()
