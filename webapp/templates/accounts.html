@@ -5,46 +5,71 @@
     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addModal">+ 添加账号</button>
 </div>
 
+<!-- 批量操作栏 -->
+<div id="batchBar" class="card mb-3" style="display:none">
+    <div class="card-body d-flex align-items-center gap-2 flex-wrap py-2">
+        <span class="fw-bold">已选 <span id="selCount">0</span> 个:</span>
+        <button class="btn btn-sm btn-warning" onclick="batchAction('keepalive')">⚡ 批量保活</button>
+        <button class="btn btn-sm btn-primary" onclick="batchAction('boot')">🖥 批量开机</button>
+        <button class="btn btn-sm btn-danger" onclick="batchAction('delete')">🗑 批量删除</button>
+        <div class="d-flex gap-1 align-items-center">
+            <input type="text" id="batchRemark" class="form-control form-control-sm" placeholder="批量备注" style="width:120px">
+            <button class="btn btn-sm btn-outline-secondary" onclick="batchAction('remark')">设备注</button>
+        </div>
+        <div class="d-flex gap-1 align-items-center">
+            <select id="batchExpire" class="form-select form-select-sm" style="width:auto">
+                <option value="never">永不过期</option>
+                <option value="1d">+1天</option>
+                <option value="1w">+1周</option>
+                <option value="1m">+1月</option>
+                <option value="1y">+1年</option>
+            </select>
+            <button class="btn btn-sm btn-outline-secondary" onclick="batchAction('expire')">设到期</button>
+        </div>
+    </div>
+</div>
+
 <div class="card">
     <div class="table-responsive">
-        <table class="table table-hover mb-0">
+        <table class="table table-hover mb-0" id="acctTable">
             <thead class="table-light">
                 <tr>
+                    <th style="width:30px"><input type="checkbox" id="checkAll" onchange="toggleAll(this)"></th>
                     {% macro sort_link(col, label) %}
                     <th>
                         <a href="?sort={{ col }}&order={{ 'desc' if current_sort == col and current_order == 'asc' else 'asc' }}" class="text-decoration-none text-dark">
                             {{ label }}
-                            {% if current_sort == col %}
-                                {{ '▲' if current_order == 'asc' else '▼' }}
-                            {% endif %}
+                            {% if current_sort == col %}{{ '▲' if current_order == 'asc' else '▼' }}{% endif %}
                         </a>
                     </th>
                     {% endmacro %}
                     {{ sort_link('username', '账号') }}
-                    {{ sort_link('vm_count', '云电脑数') }}
-                    <th>保活台数</th>
+                    {{ sort_link('remark', '备注') }}
+                    {{ sort_link('vm_count', '云电脑') }}
+                    <th>保活数</th>
                     {{ sort_link('keepalive', '保活') }}
                     {{ sort_link('interval', '间隔') }}
-                    <th>到期时间</th>
+                    {{ sort_link('expire', '到期') }}
                     {{ sort_link('last', '最近保活') }}
                     <th>操作</th>
                 </tr>
             </thead>
             <tbody>
             {% for a in accounts %}
-                <tr>
+                <tr data-id="{{ a.id }}">
+                    <td><input type="checkbox" class="row-check" value="{{ a.id }}" onchange="updateBatch()"></td>
                     <td>
                         <strong>{{ a.username }}</strong>
-                        {% if a.expire_at %}
-                        <br><small class="{{ 'text-danger' if a.expire_at[:10] < now_date else 'text-muted' }}">到期: {{ a.expire_at[:10] }}</small>
-                        {% endif %}
+                    </td>
+                    <td class="remark-cell">
+                        <span class="remark-text" ondblclick="editRemark(this, {{ a.id }})" title="双击编辑">{{ a.remark or '' }}</span>
                     </td>
                     <td>
                         {{ a.vm_count }} 台
                         {% if a.vm_running is defined %}
                         <br><small>
                             <span class="text-success">{{ a.vm_running }} 开</span>
-                            {% if a.vm_off > 0 %}<span class="text-danger">{{ a.vm_off }} 关</span>{% endif %}
+                            {% if a.vm_off > 0 %}<span class="text-danger"> {{ a.vm_off }} 关</span>{% endif %}
                         </small>
                         {% endif %}
                     </td>
@@ -75,83 +100,22 @@
                         </small>
                         {% else %}<small class="text-muted">未执行</small>{% endif %}
                     </td>
-                    <td>
-                        <span class="d-inline-flex align-items-center gap-1">
-                            <select class="form-select form-select-sm" style="width:auto;font-size:12px"
-                                    data-url="{{ url_for('main.set_expire', aid=a.id) }}"
-                                    onchange="setExpire(this)">
-                                <option value="" disabled selected>⏰ 设到期</option>
-                                <option value="never">永不过期</option>
-                                <option value="1d">+1天</option>
-                                <option value="1w">+1周</option>
-                                <option value="1m">+1月</option>
-                                <option value="1y">+1年</option>
-                                <option value="custom">自定义</option>
-                            </select>
-                            <input type="date" class="form-control form-control-sm custom-expire-date" style="width:130px;display:none;font-size:12px"
-                                   data-url="{{ url_for('main.set_expire', aid=a.id) }}"
-                                   onchange="setExpireCustom(this)">
-                        </span>
-                        <button class="btn btn-sm btn-outline-success"
-                                data-url="{{ url_for('main.keepalive_now', aid=a.id) }}"
-                                onclick="doKeepaliveAll(this)">⚡</button>
+                    <td class="text-nowrap">
+                        <button class="btn btn-sm btn-outline-success" data-url="{{ url_for('main.keepalive_now', aid=a.id) }}" onclick="doSingle(this,'⚡')">⚡</button>
                         {% if a.vm_off > 0 %}
-                        <button class="btn btn-sm btn-primary"
-                                data-url="{{ url_for('main.boot_all_vms', aid=a.id) }}"
-                                onclick="doBootAll(this)">🖥</button>
+                        <button class="btn btn-sm btn-primary" data-url="{{ url_for('main.boot_all_vms', aid=a.id) }}" onclick="doSingle(this,'🖥')">🖥</button>
                         {% endif %}
-                        <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#editModal{{ a.id }}">✏️</button>
                         <a href="{{ url_for('main.account_detail', aid=a.id) }}" class="btn btn-sm btn-outline-primary">详情</a>
-                        <form method="POST" action="{{ url_for('main.delete_account', aid=a.id) }}" class="d-inline"
-                              onsubmit="return confirm('确定删除 ' + {{ a.username|tojson }} + '？')">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button class="btn btn-sm btn-outline-danger">删除</button>
-                        </form>
                     </td>
                 </tr>
             {% endfor %}
             {% if not accounts %}
-                <tr><td colspan="8" class="text-center text-muted py-4">暂无账号，点击右上角添加</td></tr>
+                <tr><td colspan="10" class="text-center text-muted py-4">暂无账号，点击右上角添加</td></tr>
             {% endif %}
             </tbody>
         </table>
     </div>
 </div>
-
-<!-- 修改账号 Modal -->
-{% for a in accounts %}
-<div class="modal fade" id="editModal{{ a.id }}" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <form method="POST" action="{{ url_for('main.edit_account', aid=a.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="modal-header">
-                    <h5 class="modal-title">修改账号: {{ a.username }}</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label">SOHO 账号</label>
-                        <input type="text" name="username" class="form-control" value="{{ a.username }}" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">密码</label>
-                        <div class="input-group">
-                            <input type="password" name="password" class="form-control" placeholder="输入新密码" required>
-                            <button type="button" class="btn btn-outline-secondary toggle-pwd">👁</button>
-                        </div>
-                    </div>
-                    <p class="text-muted small">保存时会验证账号密码是否正确</p>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="submit" class="btn btn-primary">保存并验证</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-{% endfor %}
 
 <!-- 添加账号 Modal -->
 <div class="modal fade" id="addModal" tabindex="-1">
@@ -175,6 +139,10 @@
                             <button type="button" class="btn btn-outline-secondary toggle-pwd">👁</button>
                         </div>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <input type="text" name="remark" class="form-control" placeholder="可选，如: 张三的号">
+                    </div>
                     <p class="text-muted small">添加后会自动登录并获取云电脑列表</p>
                 </div>
                 <div class="modal-footer">
@@ -188,86 +156,97 @@
 
 <script>
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+const hdrs = {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'};
 
-function doBootAll(btn) {
-    const orig=btn.textContent;
-    btn.disabled=true;btn.textContent='⏳...';btn.className='btn btn-sm btn-secondary';
-    fetch(btn.dataset.url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':csrfToken}})
-        .then(r=>r.json()).then(data=>{
-            btn.disabled=false;
-            btn.textContent=data.success?'✅':'❌';
-            btn.className='btn btn-sm '+(data.success?'btn-success':'btn-danger');
-            setTimeout(()=>{if(data.success){btn.remove();}else{btn.textContent=orig;btn.className='btn btn-sm btn-primary';}},3000);
-        }).catch(()=>{
-            btn.disabled=false;btn.textContent='❌';btn.className='btn btn-sm btn-danger';
-            setTimeout(()=>{btn.textContent=orig;btn.className='btn btn-sm btn-primary';},3000);
+/* ── 多选 ── */
+function toggleAll(el) {
+    document.querySelectorAll('.row-check').forEach(c => c.checked = el.checked);
+    updateBatch();
+}
+function updateBatch() {
+    const checked = document.querySelectorAll('.row-check:checked');
+    const bar = document.getElementById('batchBar');
+    document.getElementById('selCount').textContent = checked.length;
+    bar.style.display = checked.length > 0 ? '' : 'none';
+}
+function getSelectedIds() {
+    return [...document.querySelectorAll('.row-check:checked')].map(c => parseInt(c.value));
+}
+
+/* ── 批量操作 ── */
+function batchAction(action) {
+    const ids = getSelectedIds();
+    if (!ids.length) return;
+    if (action === 'delete' && !confirm(`确定删除 ${ids.length} 个账号？`)) return;
+
+    const body = {action, ids};
+    if (action === 'remark') body.remark = document.getElementById('batchRemark').value;
+    if (action === 'expire') body.expire_type = document.getElementById('batchExpire').value;
+
+    const bar = document.getElementById('batchBar');
+    bar.style.opacity = '0.5';
+    bar.style.pointerEvents = 'none';
+
+    fetch('{{ url_for("main.batch_action") }}', {method: 'POST', headers: hdrs, body: JSON.stringify(body)})
+        .then(r => r.json())
+        .then(data => {
+            bar.style.opacity = '1';
+            bar.style.pointerEvents = '';
+            if (action === 'delete') { location.reload(); return; }
+            if (action === 'remark') {
+                ids.forEach(id => {
+                    const row = document.querySelector(`tr[data-id="${id}"] .remark-text`);
+                    if (row) row.textContent = body.remark;
+                });
+            }
+            if (action === 'expire') {
+                location.reload();
+            }
+            alert(data.msg || '完成');
+        })
+        .catch(e => {
+            bar.style.opacity = '1'; bar.style.pointerEvents = '';
+            alert('操作失败: ' + e);
         });
 }
 
-function setExpire(sel) {
-    const url = sel.dataset.url;
-    const val = sel.value;
-    if (val === 'custom') {
-        sel.parentElement.querySelector('.custom-expire-date').style.display = 'inline-block';
-        sel.selectedIndex = 0;
-        return;
+/* ── 单行备注编辑（双击） ── */
+function editRemark(span, aid) {
+    const old = span.textContent.trim();
+    const input = document.createElement('input');
+    input.type = 'text'; input.value = old;
+    input.className = 'form-control form-control-sm';
+    input.style.width = '120px';
+    span.replaceWith(input);
+    input.focus();
+    function save() {
+        const val = input.value.trim();
+        fetch(`/accounts/${aid}/remark`, {method:'POST', headers:{...hdrs, 'Content-Type':'application/x-www-form-urlencoded'}, body:'remark='+encodeURIComponent(val)})
+            .then(r=>r.json()).then(()=>{
+                const ns = document.createElement('span');
+                ns.className='remark-text'; ns.textContent=val;
+                ns.setAttribute('ondblclick',`editRemark(this,${aid})`);
+                ns.title='双击编辑';
+                input.replaceWith(ns);
+            });
     }
-    const body = new URLSearchParams({expire_type: val});
-    const hdrs = {'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded','X-CSRFToken':csrfToken};
-    fetch(url, {method:'POST', headers:hdrs, body})
-        .then(r => r.json())
-        .then(data => {
-            const cell = sel.closest('tr').querySelector('.expire-cell');
-            if (cell) cell.textContent = data.expire_at || '永久';
-            sel.selectedIndex = 0;
-        })
-        .catch(e => console.error('setExpire error', e));
-}
-function setExpireCustom(input) {
-    const url = input.dataset.url;
-    const body = new URLSearchParams({expire_type:'custom', custom_date: input.value});
-    const hdrs = {'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded','X-CSRFToken':csrfToken};
-    fetch(url, {method:'POST', headers:hdrs, body})
-        .then(r => r.json())
-        .then(data => {
-            const cell = input.closest('tr').querySelector('.expire-cell');
-            if (cell) cell.textContent = data.expire_at || '永久';
-            input.style.display = 'none';
-        })
-        .catch(e => console.error('setExpireCustom error', e));
+    input.onblur = save;
+    input.onkeydown = e => { if(e.key==='Enter') save(); if(e.key==='Escape') { input.replaceWith(span); } };
 }
 
-function doKeepaliveAll(btn) {
-    const url = btn.dataset.url;
-    const origText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = '⏳ 中...';
-    btn.classList.remove('btn-outline-success', 'btn-outline-danger');
-    btn.classList.add('btn-secondary');
-
-    fetch(url, {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken}})
-        .then(r => { if(!r.ok) throw new Error(r.status); return r.json(); })
-        .then(data => {
-            btn.disabled = false;
-            btn.textContent = data.success ? '✅ 成功' : '❌ 失败';
-            btn.classList.remove('btn-secondary');
-            btn.classList.add(data.success ? 'btn-outline-success' : 'btn-outline-danger');
-            setTimeout(() => {
-                btn.textContent = origText;
-                btn.classList.remove('btn-outline-danger');
-                btn.classList.add('btn-outline-success');
-            }, 3000);
+/* ── 单行快捷按钮 ── */
+function doSingle(btn, orig) {
+    btn.disabled=true; btn.textContent='⏳';
+    fetch(btn.dataset.url, {method:'POST', headers:hdrs})
+        .then(r=>r.json())
+        .then(data=>{
+            btn.disabled=false;
+            btn.textContent=data.success?'✅':'❌';
+            setTimeout(()=>{btn.textContent=orig;},3000);
         })
-        .catch(() => {
-            btn.disabled = false;
-            btn.textContent = '❌ 错误';
-            btn.classList.remove('btn-secondary');
-            btn.classList.add('btn-outline-danger');
-            setTimeout(() => {
-                btn.textContent = origText;
-                btn.classList.remove('btn-outline-danger');
-                btn.classList.add('btn-outline-success');
-            }, 3000);
+        .catch(()=>{
+            btn.disabled=false; btn.textContent='❌';
+            setTimeout(()=>{btn.textContent=orig;},3000);
         });
 }
 </script>

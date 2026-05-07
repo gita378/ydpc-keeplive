@@ -78,6 +78,7 @@ def _migrate(db):
         ("keepalive_log", "remain_duration_time", "TEXT"),
         ("cloud_account", "expire_at", "TEXT"),
         ("cloud_vm", "keepalive_enabled", "INTEGER DEFAULT 1"),
+        ("cloud_account", "remark", "TEXT DEFAULT ''"),
     ]
     for table, col, col_type in migrations:
         existing = [r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]

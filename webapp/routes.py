@@ -32,9 +32,11 @@ def index():
     order = request.args.get("order", "asc")
     allowed_sorts = {
         "username": "a.username",
+        "remark": "a.remark",
         "vm_count": "vm_count",
         "keepalive": "a.keepalive_enabled",
         "interval": "a.keepalive_interval",
+        "expire": "a.expire_at",
         "last": "a.last_keepalive_at",
         "id": "a.id",
     }
@@ -59,6 +61,7 @@ def index():
 def add_account():
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "").strip()
+    remark = request.form.get("remark", "").strip()
     if not username or not password:
         flash("账号和密码不能为空", "danger")
         return redirect(url_for("main.index"))
@@ -79,8 +82,8 @@ def add_account():
 
     # 写入数据库
     cur = db.execute(
-        "INSERT INTO cloud_account (username, password, last_login_at) VALUES (?, ?, ?)",
-        (username, password, _now_cst()),
+        "INSERT INTO cloud_account (username, password, remark, last_login_at) VALUES (?, ?, ?, ?)",
+        (username, password, remark, _now_cst()),
     )
     account_id = cur.lastrowid
 
@@ -444,6 +447,109 @@ def keepalive_now(aid):
         return jsonify({"success": status == "success", "msg": msg})
     flash(f"保活完成: {msg}", "success" if status == "success" else "warning")
     return redirect(url_for("main.account_detail", aid=aid))
+
+
+@main_bp.route("/accounts/<int:aid>/remark", methods=["POST"])
+@login_required
+def set_remark(aid):
+    from flask import jsonify
+    remark = request.form.get("remark", "").strip()
+    db = get_db()
+    db.execute("UPDATE cloud_account SET remark=? WHERE id=?", (remark, aid))
+    db.commit()
+    return jsonify({"success": True, "remark": remark})
+
+
+@main_bp.route("/batch", methods=["POST"])
+@login_required
+def batch_action():
+    """批量操作: action=keepalive|boot|delete|remark|expire, ids=[1,2,3]"""
+    from flask import jsonify
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "")
+    ids = data.get("ids", [])
+    if not ids or not action:
+        return jsonify({"success": False, "msg": "参数缺失"}), 400
+
+    db = get_db()
+    results = []
+
+    if action == "delete":
+        for aid in ids:
+            remove_job(aid)
+            db.execute("DELETE FROM cloud_vm WHERE account_id=?", (aid,))
+            db.execute("DELETE FROM keepalive_log WHERE account_id=?", (aid,))
+            db.execute("DELETE FROM cloud_account WHERE id=?", (aid,))
+        db.commit()
+        return jsonify({"success": True, "msg": f"已删除 {len(ids)} 个账号"})
+
+    if action == "remark":
+        remark = data.get("remark", "")
+        for aid in ids:
+            db.execute("UPDATE cloud_account SET remark=? WHERE id=?", (remark, aid))
+        db.commit()
+        return jsonify({"success": True, "msg": f"已更新 {len(ids)} 个备注"})
+
+    if action == "expire":
+        expire_type = data.get("expire_type", "never")
+        custom_date = data.get("custom_date", "")
+        if expire_type == "never":
+            expire_at = None
+        elif expire_type == "custom" and custom_date:
+            expire_at = custom_date + "T23:59:59"
+        else:
+            from datetime import timedelta as _td
+            days_map = {"1d": 1, "1w": 7, "1m": 30, "1y": 365}
+            days = days_map.get(expire_type, 0)
+            expire_at = (datetime.now(_CST) + _td(days=days)).strftime("%Y-%m-%dT%H:%M:%S") if days else None
+        for aid in ids:
+            db.execute("UPDATE cloud_account SET expire_at=? WHERE id=?", (expire_at, aid))
+        db.commit()
+        label = expire_at[:10] if expire_at else "永不过期"
+        return jsonify({"success": True, "msg": f"{len(ids)} 个账号到期设为 {label}"})
+
+    if action == "keepalive":
+        for aid in ids:
+            account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+            if not account:
+                continue
+            disabled = {r["user_service_id"] for r in
+                        db.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (aid,)).fetchall()}
+            try:
+                res, fresh = keepalive_account(account["username"], account["password"],
+                                               hold=current_app.config.get("HOLD_SECONDS", 10), skip_usids=disabled)
+                now = _now_cst()
+                status = "success" if all(r.success for r in res) else "failed"
+                db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
+                results.append(f"{account['username']}: {'✅' if status == 'success' else '❌'}")
+            except Exception as e:
+                results.append(f"{account['username']}: ❌ {e}")
+        db.commit()
+        return jsonify({"success": True, "msg": " | ".join(results) or "完成"})
+
+    if action == "boot":
+        for aid in ids:
+            account = db.execute("SELECT * FROM cloud_account WHERE id=?", (aid,)).fetchone()
+            if not account:
+                continue
+            try:
+                client = soho_login(account["username"], account["password"])
+                vms = fetch_vm_list(client)
+                booted = 0
+                for vm in vms:
+                    if vm.get("vmStatus") in (23, "23"):
+                        ok, msg = boot_vm(client, vm)
+                        if ok:
+                            booted += 1
+                            db.execute("UPDATE cloud_vm SET vm_status='运行中' WHERE account_id=? AND user_service_id=?",
+                                       (aid, int(vm["userServiceId"])))
+                results.append(f"{account['username']}: {booted} 台已开机")
+            except Exception as e:
+                results.append(f"{account['username']}: ❌ {e}")
+        db.commit()
+        return jsonify({"success": True, "msg": " | ".join(results) or "完成"})
+
+    return jsonify({"success": False, "msg": f"未知操作: {action}"}), 400
 
 
 @main_bp.route("/logs")
