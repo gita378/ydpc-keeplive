@@ -6,7 +6,7 @@
 </div>
 
 <!-- 批量操作栏 -->
-<div id="batchBar" class="card mb-3" style="display:none">
+<div id="batchBar" class="card mb-3">
     <div class="card-body d-flex align-items-center gap-2 flex-wrap py-2">
         <span class="fw-bold">已选 <span id="selCount">0</span> 个:</span>
         <button class="btn btn-sm btn-warning" onclick="batchAction('keepalive')">⚡ 批量保活</button>
@@ -224,7 +224,7 @@ function updateBatch() {
     const checked = document.querySelectorAll('.row-check:checked');
     const bar = document.getElementById('batchBar');
     document.getElementById('selCount').textContent = checked.length;
-    bar.style.display = checked.length > 0 ? '' : 'none';
+    document.querySelectorAll('#batchBar button').forEach(b => b.disabled = checked.length === 0);
 }
 function getSelectedIds() {
     return [...document.querySelectorAll('.row-check:checked')].map(c => parseInt(c.value));
