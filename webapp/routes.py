@@ -375,19 +375,34 @@ def keepalive_vm(aid, vmid):
     if not account or not vm_row:
         return jsonify({"success": False, "msg": "账号或云电脑不存��"}), 404
 
-    from keepalive_core import soho_login, keepalive_single_vm
+    from keepalive_core import soho_login, keepalive_single_vm, fetch_vm_list
     try:
         client = soho_login(account["username"], account["password"])
         vm_dict = json.loads(vm_row["raw_json"]) if vm_row["raw_json"] else {"userServiceId": vm_row["user_service_id"], "vmName": vm_row["vm_name"]}
         result = keepalive_single_vm(client, vm_dict, hold=current_app.config.get("HOLD_SECONDS", 10))
         now = _now_cst()
+        # 保活后拉最新状态
+        vm_status_after = ""
+        remain = None
+        try:
+            fresh = fetch_vm_list(client)
+            for v in fresh:
+                if int(v.get("userServiceId", 0)) == result.user_service_id:
+                    vm_status_after = v.get("vmStatusShow", "")
+                    remain = v.get("remainDurationTime")
+                    db.execute("UPDATE cloud_vm SET vm_status=?, remain_duration_time=?, raw_json=? WHERE account_id=? AND user_service_id=?",
+                               (vm_status_after, str(remain) if remain is not None else None, json.dumps(v, ensure_ascii=False), aid, result.user_service_id))
+                    break
+        except Exception:
+            pass
         db.execute(
             "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
-            "error_message, vm_status_before, booted, executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "vm_status, remain_duration_time, error_message, vm_status_before, booted, executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (aid, result.vm_name, result.user_service_id,
-             "success" if result.success else "failed", result.cag_code, result.error or None,
-             result.vm_status_before, int(result.booted), now),
+             "success" if result.success else "failed", result.cag_code,
+             vm_status_after, str(remain) if remain is not None else None,
+             result.error or None, result.vm_status_before, int(result.booted), now),
         )
         db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",
                    (now, "success" if result.success else "failed", aid))
@@ -523,6 +538,21 @@ def batch_action():
         db.commit()
         label = expire_at[:10] if expire_at else "永不过期"
         return jsonify({"success": True, "msg": f"{len(ids)} 个账号到期设为 {label}"})
+
+    if action == "interval":
+        try:
+            interval = int(data.get("interval", 600))
+        except (ValueError, TypeError):
+            interval = 600
+        valid = [v for v, _ in INTERVAL_OPTIONS]
+        if interval not in valid:
+            interval = 600
+        for aid in ids:
+            db.execute("UPDATE cloud_account SET keepalive_interval=? WHERE id=?", (interval, aid))
+            reschedule_job(aid, interval)
+        db.commit()
+        label = dict(INTERVAL_OPTIONS).get(interval, f"{interval}s")
+        return jsonify({"success": True, "msg": f"{len(ids)} 个账号间隔设为 {label}"})
 
     if action == "keepalive":
         for aid in ids:

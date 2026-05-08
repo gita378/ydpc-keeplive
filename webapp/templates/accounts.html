@@ -17,6 +17,14 @@
             <button class="btn btn-sm btn-outline-secondary" onclick="batchAction('remark')">设备注</button>
         </div>
         <div class="d-flex gap-1 align-items-center">
+            <select id="batchInterval" class="form-select form-select-sm" style="width:auto">
+                {% for val, label in intervals %}
+                <option value="{{ val }}">{{ label }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-sm btn-outline-secondary" onclick="batchAction('interval')">设间隔</button>
+        </div>
+        <div class="d-flex gap-1 align-items-center">
             <select id="batchExpire" class="form-select form-select-sm" style="width:auto">
                 <option value="never">永不过期</option>
                 <option value="1d">+1天</option>
@@ -238,6 +246,7 @@ function batchAction(action) {
 
     const body = {action, ids};
     if (action === 'remark') body.remark = document.getElementById('batchRemark').value;
+    if (action === 'interval') body.interval = parseInt(document.getElementById('batchInterval').value);
     if (action === 'expire') body.expire_type = document.getElementById('batchExpire').value;
 
     const bar = document.getElementById('batchBar');
