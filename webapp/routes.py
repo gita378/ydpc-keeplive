@@ -392,7 +392,13 @@ def keepalive_vm(aid, vmid):
         db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",
                    (now, "success" if result.success else "failed", aid))
         db.commit()
-        return jsonify({"success": result.success, "msg": f"{result.vm_name}: {'保活成功' if result.success else '保活失败 ' + result.error}", "cag_code": result.cag_code})
+        boot_tag = " (已自动开机🖥)" if result.booted else ""
+        status_tag = f"[{result.vm_status_before}]" if result.vm_status_before else ""
+        if result.success:
+            msg = f"{result.vm_name}{status_tag}: 保活成功{boot_tag}"
+        else:
+            msg = f"{result.vm_name}{status_tag}: 保活失败{boot_tag} {result.error}"
+        return jsonify({"success": result.success, "msg": msg, "cag_code": result.cag_code, "booted": result.booted})
     except Exception as e:
         return jsonify({"success": False, "msg": f"保活出错: {e}"}), 500
 
@@ -444,7 +450,12 @@ def keepalive_now(aid):
     db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
     db.commit()
 
-    msg = " | ".join(f"{r.vm_name}: {'✅' if r.success else '❌'}" for r in results)
+    def _fmt(r):
+        boot = "🖥" if r.booted else ""
+        status = f"[{r.vm_status_before}]" if r.vm_status_before else ""
+        ok = "✅" if r.success else "❌"
+        return f"{r.vm_name}{status}: {ok}{boot}"
+    msg = " | ".join(_fmt(r) for r in results)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return jsonify({"success": status == "success", "msg": msg})
     flash(f"保活完成: {msg}", "success" if status == "success" else "warning")
@@ -526,7 +537,9 @@ def batch_action():
                 now = _now_cst()
                 status = "success" if all(r.success for r in res) else "failed"
                 db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
-                results.append(f"{account['username']}: {'✅' if status == 'success' else '❌'}")
+                booted_count = sum(1 for r in res if r.booted)
+                boot_tag = f" 🖥×{booted_count}" if booted_count else ""
+                results.append(f"{account['username']}: {'✅' if status == 'success' else '❌'}{boot_tag}")
             except Exception as e:
                 results.append(f"{account['username']}: ❌ {e}")
         db.commit()
