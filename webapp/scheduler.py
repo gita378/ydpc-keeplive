@@ -73,13 +73,13 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
             remain = vm_info.get("remainDurationTime")
             conn.execute(
                 "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
-                "vm_status, remain_duration_time, error_message, executed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "vm_status, remain_duration_time, error_message, vm_status_before, booted, executed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (account_id, r.vm_name, r.user_service_id,
                  "success" if r.success else "failed", r.cag_code,
                  vm_info.get("vmStatusShow", ""),
                  str(remain) if remain is not None else None,
-                 r.error or None, now),
+                 r.error or None, r.vm_status_before, int(r.booted), now),
             )
         conn.execute(
             "UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",

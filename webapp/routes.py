@@ -382,10 +382,12 @@ def keepalive_vm(aid, vmid):
         result = keepalive_single_vm(client, vm_dict, hold=current_app.config.get("HOLD_SECONDS", 10))
         now = _now_cst()
         db.execute(
-            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, error_message, executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
+            "error_message, vm_status_before, booted, executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (aid, result.vm_name, result.user_service_id,
-             "success" if result.success else "failed", result.cag_code, result.error or None, now),
+             "success" if result.success else "failed", result.cag_code, result.error or None,
+             result.vm_status_before, int(result.booted), now),
         )
         db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",
                    (now, "success" if result.success else "failed", aid))
@@ -432,12 +434,12 @@ def keepalive_now(aid):
         remain = vm_info.get("remainDurationTime")
         db.execute(
             "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
-            "vm_status, remain_duration_time, error_message, executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "vm_status, remain_duration_time, error_message, vm_status_before, booted, executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (aid, r.vm_name, r.user_service_id, "success" if r.success else "failed", r.cag_code,
              vm_info.get("vmStatusShow", ""),
              str(remain) if remain is not None else None,
-             r.error or None, now),
+             r.error or None, r.vm_status_before, int(r.booted), now),
         )
     db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
     db.commit()

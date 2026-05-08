@@ -51,6 +51,8 @@ class KeepaliveResult:
     success: bool
     cag_code: int = 0
     error: str = ""
+    vm_status_before: str = ""    # 保活前 VM 状态 (运行中/已关机/...)
+    booted: bool = False          # 是否触发了自动开机
 
 
 # ── 工具 ──
@@ -519,6 +521,10 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
     usid = int(vm["userServiceId"])
     name = vm.get("vmName", "?")
     vm_status = vm.get("vmStatus")
+    status_show = vm.get("vmStatusShow", str(vm_status) if vm_status else "未知")
+    booted = False
+
+    LOG.info("[%s] 保活前状态: %s (vmStatus=%s)", name, status_show, vm_status)
 
     if auto_boot and vm_status in (23, "23"):
         LOG.info("[%s] VM 处于关机状态，尝试自动开机...", name)
@@ -527,8 +533,10 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
                 success=False, error=f"自动开机失败: {boot_msg}",
+                vm_status_before=status_show, booted=False,
             )
         LOG.info("[%s] %s", name, boot_msg)
+        booted = True
 
     try:
         auth = client.get_firm_auth(usid)
@@ -537,11 +545,13 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
         return KeepaliveResult(
             vm_name=name, user_service_id=usid,
             success=(code == 200), cag_code=code,
+            vm_status_before=status_show, booted=booted,
         )
     except Exception as e:
         return KeepaliveResult(
             vm_name=name, user_service_id=usid,
             success=False, error=str(e),
+            vm_status_before=status_show, booted=booted,
         )
 
 
