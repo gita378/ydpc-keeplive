@@ -237,6 +237,9 @@ class CloudPcClient:
     def heartbeat(self, usid: int) -> dict:
         return self._request("/cc/cloudPc/heartbeat/v2", {"userServiceId": usid})
 
+    def heartbeat_v1(self, usid: int) -> dict:
+        return self._request("/cc/cloudPc/heartbeat/v1", {"userServiceId": usid})
+
 
 # ── ZTEC 鉴权 ──
 def ztec_auth(auth: dict, hold: float = 10.0, timeout: float = 10.0) -> int:
@@ -546,19 +549,18 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
 
     cag_ip = str(auth.get("cagIp", "")).strip()
     if not cag_ip:
-        LOG.warning("[%s] 无 cagIp (非ZTE云电脑 spuCode=%s)，跳过ZTEC保活", name, vm.get("spuCode", "?"))
-        # 没有 cagIp 的 VM 只做 heartbeat
+        LOG.info("[%s] 非ZTE云电脑(spuCode=%s)，使用v1心跳保活", name, vm.get("spuCode", "?"))
         try:
-            client.heartbeat(usid)
+            client.heartbeat_v1(usid)
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
-                success=True, error="仅heartbeat(非ZTE)",
+                success=True, cag_code=200,
                 vm_status_before=status_show,
             )
         except Exception as e:
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
-                success=False, error=f"heartbeat失败: {e}",
+                success=False, error=f"heartbeat_v1失败: {e}",
                 vm_status_before=status_show,
             )
 
