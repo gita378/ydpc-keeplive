@@ -15,7 +15,7 @@ from scheduler import add_job, remove_job, reschedule_job
 main_bp = Blueprint("main", __name__)
 
 INTERVAL_OPTIONS = [
-    (540, "9 分钟"),
+    (480, "8 分钟"),
     (600, "10 分钟"),
     (1200, "20 分钟"),
     (1680, "28 分钟 (推荐)"),
