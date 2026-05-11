@@ -194,7 +194,6 @@
 </div>
 
 <script>
-const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
 function ajaxPost(url, headers={}) {
     return fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':csrfToken, ...headers}});
 }
