@@ -604,9 +604,69 @@ def batch_action():
 @login_required
 def logs():
     db = get_db()
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = max(10, min(200, int(request.args.get("per_page", 50))))
+
+    # 筛选条件
+    filters = []
+    params = []
+    f_username = request.args.get("username", "").strip()
+    f_vm_name = request.args.get("vm_name", "").strip()
+    f_status = request.args.get("status", "")
+    f_vm_status = request.args.get("vm_status", "")
+    f_vm_status_before = request.args.get("vm_status_before", "")
+    f_booted = request.args.get("booted", "")
+    f_date_from = request.args.get("date_from", "").strip()
+    f_date_to = request.args.get("date_to", "").strip()
+
+    if f_username:
+        filters.append("a.username LIKE ?")
+        params.append(f"%{f_username}%")
+    if f_vm_name:
+        filters.append("l.vm_name LIKE ?")
+        params.append(f"%{f_vm_name}%")
+    if f_status in ("success", "failed"):
+        filters.append("l.status = ?")
+        params.append(f_status)
+    if f_vm_status:
+        filters.append("l.vm_status = ?")
+        params.append(f_vm_status)
+    if f_vm_status_before:
+        filters.append("l.vm_status_before = ?")
+        params.append(f_vm_status_before)
+    if f_booted == "1":
+        filters.append("l.booted = 1")
+    elif f_booted == "0":
+        filters.append("(l.booted = 0 OR l.booted IS NULL)")
+    if f_date_from:
+        filters.append("l.executed_at >= ?")
+        params.append(f_date_from)
+    if f_date_to:
+        filters.append("l.executed_at <= ?")
+        params.append(f_date_to + " 23:59:59")
+
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+
+    # 总数
+    total = db.execute(
+        f"SELECT COUNT(*) FROM keepalive_log l JOIN cloud_account a ON l.account_id=a.id {where}", params
+    ).fetchone()[0]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+
     rows = db.execute(
-        "SELECT l.*, a.username FROM keepalive_log l "
-        "JOIN cloud_account a ON l.account_id=a.id "
-        "ORDER BY l.executed_at DESC LIMIT 100"
+        f"SELECT l.*, a.username FROM keepalive_log l "
+        f"JOIN cloud_account a ON l.account_id=a.id {where} "
+        f"ORDER BY l.executed_at DESC LIMIT ? OFFSET ?",
+        params + [per_page, (page - 1) * per_page]
     ).fetchall()
-    return render_template("logs.html", logs=rows)
+
+    # 获取所有账号列表用于筛选下拉
+    accounts = db.execute("SELECT DISTINCT username FROM cloud_account ORDER BY username").fetchall()
+
+    return render_template("logs.html", logs=rows, page=page, total_pages=total_pages,
+                           total=total, per_page=per_page,
+                           accounts=[a["username"] for a in accounts],
+                           f_username=f_username, f_vm_name=f_vm_name, f_status=f_status,
+                           f_vm_status=f_vm_status, f_vm_status_before=f_vm_status_before,
+                           f_booted=f_booted, f_date_from=f_date_from, f_date_to=f_date_to)
