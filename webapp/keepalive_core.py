@@ -287,11 +287,14 @@ def boot_vm(client: CloudPcClient, vm: dict, timeout: int = 30) -> tuple:
     usid = int(vm["userServiceId"])
     name = vm.get("vmName", "?")
     vm_status = vm.get("vmStatus")
-    if vm_status not in (23, "23"):
+    if not _is_vm_off(vm_status):
         return True, f"{name}: 已在运行中(status={vm.get('vmStatusShow', vm_status)})"
 
     try:
         auth_data = client.get_firm_auth(usid)
+        cag_ip = str(auth_data.get("cagIp", "")).strip()
+        if not cag_ip:
+            return False, f"{name}: 无cagIp(非ZTE云电脑)，无法开机"
         ok, msg = _csap_start_desktop(auth_data, timeout=timeout)
         if ok:
             return True, f"{name}: 开机成功"
@@ -515,6 +518,11 @@ def _csap_start_desktop(auth_data: dict, timeout: int = 30) -> tuple:
     return True, "startDesktop sent (poll timeout)"
 
 
+def _is_vm_off(vm_status) -> bool:
+    """判断 VM 是否关机 (vmStatus=16 或 23 都是关机)"""
+    return vm_status in (16, "16", 23, "23")
+
+
 def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout: int = 10,
                         auto_boot: bool = True) -> KeepaliveResult:
     """对单台云电脑做保活。如果 VM 关机且 auto_boot=True，先尝试开机"""
@@ -526,8 +534,36 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
 
     LOG.info("[%s] 保活前状态: %s (vmStatus=%s)", name, status_show, vm_status)
 
-    if auto_boot and vm_status in (23, "23"):
-        LOG.info("[%s] VM 处于关机状态，尝试自动开机...", name)
+    # 先拿 firmAuth 检查是否支持 ZTEC
+    try:
+        auth = client.get_firm_auth(usid)
+    except Exception as e:
+        return KeepaliveResult(
+            vm_name=name, user_service_id=usid,
+            success=False, error=f"getFirmAuth失败: {e}",
+            vm_status_before=status_show,
+        )
+
+    cag_ip = str(auth.get("cagIp", "")).strip()
+    if not cag_ip:
+        LOG.warning("[%s] 无 cagIp (非ZTE云电脑 spuCode=%s)，跳过ZTEC保活", name, vm.get("spuCode", "?"))
+        # 没有 cagIp 的 VM 只做 heartbeat
+        try:
+            client.heartbeat(usid)
+            return KeepaliveResult(
+                vm_name=name, user_service_id=usid,
+                success=True, error="仅heartbeat(非ZTE)",
+                vm_status_before=status_show,
+            )
+        except Exception as e:
+            return KeepaliveResult(
+                vm_name=name, user_service_id=usid,
+                success=False, error=f"heartbeat失败: {e}",
+                vm_status_before=status_show,
+            )
+
+    if auto_boot and _is_vm_off(vm_status):
+        LOG.info("[%s] VM 处于关机状态(status=%s)，尝试自动开机...", name, vm_status)
         boot_ok, boot_msg = boot_vm(client, vm, timeout=30)
         if not boot_ok:
             return KeepaliveResult(
@@ -537,9 +573,13 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
             )
         LOG.info("[%s] %s", name, boot_msg)
         booted = True
+        # 开机后重新拿 firmAuth (连接信息可能变了)
+        try:
+            auth = client.get_firm_auth(usid)
+        except Exception:
+            pass
 
     try:
-        auth = client.get_firm_auth(usid)
         client.heartbeat(usid)
         code = ztec_auth(auth, hold=hold, timeout=timeout)
         return KeepaliveResult(
