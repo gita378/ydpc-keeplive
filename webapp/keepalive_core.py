@@ -535,6 +535,13 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
     status_show = vm.get("vmStatusShow", str(vm_status) if vm_status else "未知")
     booted = False
 
+    if vm_status in (0, "0") and not status_show:
+        LOG.info("[%s] vmStatus=0 无状态，跳过(未分配/待初始化)", name)
+        return KeepaliveResult(
+            vm_name=name, user_service_id=usid,
+            success=True, vm_status_before="未激活",
+        )
+
     LOG.info("[%s] 保活前状态: %s (vmStatus=%s)", name, status_show, vm_status)
 
     # 先拿 firmAuth 检查是否支持 ZTEC
