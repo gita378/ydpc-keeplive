@@ -691,3 +691,112 @@ Body: AES-CBC(PKCS7(""), uas_key, uas_iv).hex().upper()
 ### 结论
 
 CSAP 的 4 个 action 统一模式：所有业务参数在 query string，body 只传加密的辅助 JSON（getToken 传 {clienttype,hardware,nettype,ostype}）或加密空字符串。startDesktop 不需要 body 参数。
+
+## 十六、家庭云电脑 SC 协议逆向（2026-05-11）
+
+### 16.1 产品区分
+
+| 产品 | spuCode | 连接方式 | 保活 | 开机 |
+|------|---------|---------|------|------|
+| ZTE 云电脑 | `zte-cloud-pc` | CAG → ZTEC → KCP/UDT → SPICE | ZTEC 鉴权 + heartbeat ✅ | CSAP startDesktop ✅ |
+| 家庭云电脑 | `sc-cloud-pc` | SCG → JWAE/XE → SPICE | v1 heartbeat ✅ | SC API (部分完成) |
+
+### 16.2 家庭云电脑保活
+
+`/cc/cloudPc/heartbeat/v2` 对 SC 云电脑返回 `4043 该云电脑已在其他设备上登录`。
+
+发现 **v1 接口** `/cc/cloudPc/heartbeat/v1` 直接返回 SUCCESS，不检查设备冲突。22 台 VM 全部验证通过。
+
+### 16.3 SC API 协议栈
+
+SC 云电脑使用独立的 API 服务器，基于 OAuth 2.0 认证：
+
+```
+API 服务器: https://api.soho.komect.com:1443
+Native SDK: libChuanyunSDK.dylib (Swift, 使用 Alamofire + Moya + SwiftyRSA)
+```
+
+**API 端点：**
+| 路径 | 用途 |
+|------|------|
+| `/gzs/auth/oauth/rsa-public-key` | RSA 公钥（用于加密 vmId） |
+| `/gzs/auth/oauth/token` | OAuth token 获取 |
+| `/sc/open-portal/openapi/terminal/v1/getConnectInfo` | 获取连接信息（触发开机） |
+| `/sc/open-portal/openapi/terminal/v1/getVmReadyStatus` | 查询 VM 就绪状态 |
+| `/sc/open-portal/openapi/terminal/v1/vm/handle` | VM 操作（重启等） |
+
+### 16.4 OAuth 认证（已解决）
+
+**关键发现：不是标准 OAuth，使用自定义 `grant_type=ext`**
+
+```
+POST /gzs/auth/oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+Headers:
+  gzs-client-id: sc-user-5e38ece5       ← 固定值，从 SDK 日志中捕获
+  gzs-timestamp: {毫秒时间戳}
+  sc-terminal-sn: {设备序列号}
+  sc-unit-type: Mac
+  sc-network-type: 2
+  User-Agent: cdpsdk-macos-2.18.21(2.18.21.159)
+
+Body:
+  grant_type=ext                         ← 自定义扩展 grant（非 password/authorization_code）
+  client_id=sc-user-5e38ece5             ← 固定应用标识
+  bizCode=10002                          ← 来自 getFirmAuth 响应
+  token={scAuthCode}                     ← 来自 getFirmAuth 的 JWT
+  source=biz
+
+响应：access_token (JWT, 12h有效期) + refresh_token
+```
+
+**逆向过程：**
+1. `client_id` 在 SDK 二进制中始终为空（运行时设置）
+2. 通过 `--ignore-certificate-errors` 启动官方客户端捕获日志
+3. 从日志 `headerparamsDict` 中发现 `gzs-client-id: sc-user-5e38ece5`
+4. 通过 IDA 反编译 `CloudComputerInterface.task.getter` 发现 `grant_type=ext`
+5. 从反编译代码确认 `token` 参数是 `connectAuthCode`（即 scAuthCode JWT）
+
+### 16.5 开机流程（部分完成）
+
+**官方客户端日志证实的完整流程：**
+
+```
+1. getToken (OAuth ext) → access_token ✅ Python 已实现
+2. getConnectInfo (vmId RSA加密) → 触发开机 + 返回 scgConnectInfo
+   - 不需要调 handleVM！getConnectInfo 本身就是开机接口
+   - 关机 VM 调用后约 56 秒返回
+   - 响应包含 scgIP, scgPort, traceID
+3. getVmReadyStatus (vmId + traceId) → readyStatus=1 表示就绪
+4. 连接 JWAE → SCG → SPICE 桌面
+```
+
+**getConnectInfo 请求格式：**
+```
+POST /sc/open-portal/openapi/terminal/v1/getConnectInfo
+Content-Type: application/json
+Authorization: Bearer {access_token}
+gzs-client-id: sc-user-5e38ece5
+gzs-timestamp: {毫秒时间戳}
+
+Body: {"vmId": "{rsa}BASE64(RSA_PKCS1v15(vmIdString))"}
+```
+
+### 16.6 未解决：RSA 加密兼容性
+
+Python `cryptography` 库的 RSA PKCS1v15 加密结果被服务端拒绝（`90010002 参数错误或解密失败`）。
+
+- RSA 公钥确认正确（API 返回值 == 二进制硬编码值）
+- 加密算法确认正确（`kSecKeyAlgorithmRSAEncryptionPKCS1` = PKCS1v15）
+- Base64 编码格式确认正确（标准 base64，128 字节 → 172 字符）
+- 官方 SDK 使用 SwiftyRSA → Apple Security framework
+
+**可能原因：**
+1. Python 和 Apple 的 PKCS1v15 padding 随机字节生成方式不同（不影响解密）
+2. 服务端可能不是用 RSA 私钥解密，而是用某种自定义算法
+3. 可能需要特定的 RSA padding 变体
+
+**下一步：**
+- 用 macOS 的 Security framework（通过 ctypes 调用）做 RSA 加密
+- 或者直接 hook 官方 SDK 的加密函数获取加密结果
