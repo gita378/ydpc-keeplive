@@ -52,9 +52,9 @@
             </select>
             <button class="btn btn-sm btn-outline-primary">设置间隔</button>
         </form>
-        <form method="POST" action="{{ url_for('main.keepalive_now', aid=account.id) }}">
+        <form method="POST" action="{{ url_for('main.keepalive_now', aid=account.id) }}" class="js-keepalive-now-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-warning">⚡ 立即保活</button>
+            <button class="btn btn-sm btn-warning js-keepalive-now-btn">⚡ 立即保活</button>
         </form>
         <button class="btn btn-sm btn-success" onclick="bootAll(this)" data-url="{{ url_for('main.boot_all_vms', aid=account.id) }}">🖥 全部开机</button>
         <form method="POST" action="{{ url_for('main.refresh_vms', aid=account.id) }}">
@@ -197,6 +197,26 @@
 function ajaxPost(url, headers={}) {
     return fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':csrfToken, ...headers}});
 }
+
+document.addEventListener('submit', function(e) {
+    const form = e.target.closest('.js-keepalive-now-form');
+    if (!form) return;
+    e.preventDefault();
+    const btn = form.querySelector('.js-keepalive-now-btn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ 后台启动中...';
+    btn.className = 'btn btn-sm btn-secondary js-keepalive-now-btn';
+    ajaxPost(form.action).then(r=>r.json()).then(data=>{
+        btn.textContent = data.success ? '✅ 已后台执行' : '❌ 启动失败';
+        btn.className = 'btn btn-sm ' + (data.success ? 'btn-outline-success' : 'btn-outline-danger') + ' js-keepalive-now-btn';
+        setTimeout(()=>{btn.disabled=false;btn.textContent=orig;btn.className='btn btn-sm btn-warning js-keepalive-now-btn';},5000);
+    }).catch(()=>{
+        btn.textContent='❌ 网络错误';
+        btn.className='btn btn-sm btn-outline-danger js-keepalive-now-btn';
+        setTimeout(()=>{btn.disabled=false;btn.textContent=orig;btn.className='btn btn-sm btn-warning js-keepalive-now-btn';},3000);
+    });
+});
 
 function toggleVmKeepalive(btn) {
     ajaxPost(btn.dataset.url).then(r=>r.json()).then(data=>{

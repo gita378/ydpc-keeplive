@@ -432,65 +432,22 @@ def keepalive_now(aid):
             return jsonify({"success": False, "msg": "账号不存在"}), 404
         return redirect(url_for("main.index"))
 
-    # AJAX 请求改为后台执行，避免 504 超时
-    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        import threading
-        db_path = current_app.config["DATABASE"]
-        hold = current_app.config.get("HOLD_SECONDS", 10)
-        username, password = account["username"], account["password"]
-        disabled = {r["user_service_id"] for r in
-                    db.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (aid,)).fetchall()}
-        def _bg():
-            from scheduler import _run_keepalive
-            _run_keepalive(aid, username, password, db_path, hold)
-        threading.Thread(target=_bg, daemon=True).start()
-        return jsonify({"success": True, "msg": "保活已在后台执行..."})
+    import threading
+    db_path = current_app.config["DATABASE"]
+    hold = current_app.config.get("HOLD_SECONDS", 10)
+    manual_workers = int(current_app.config.get("MANUAL_KEEPALIVE_WORKERS", 2))
+    username, password = account["username"], account["password"]
 
-    # 跳过关闭保活的 VM
-    disabled = {r["user_service_id"] for r in
-                db.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (aid,)).fetchall()}
-    results, fresh_vms = keepalive_account(account["username"], account["password"],
-                                           hold=current_app.config.get("HOLD_SECONDS", 10),
-                                           skip_usids=disabled)
-    now = _now_cst()
-    status = "success" if all(r.success for r in results) else "failed"
-    # 刷新 VM 状态
-    if fresh_vms:
-        for vm in fresh_vms:
-            usid = int(vm.get("userServiceId", 0))
-            db.execute(
-                "UPDATE cloud_vm SET vm_status=?, remain_duration_time=?, raw_json=? "
-                "WHERE account_id=? AND user_service_id=?",
-                (vm.get("vmStatusShow", ""),
-                 str(vm.get("remainDurationTime", "")) if vm.get("remainDurationTime") is not None else None,
-                 json.dumps(vm, ensure_ascii=False),
-                 aid, usid),
-            )
-    vm_map = {int(vm.get("userServiceId", 0)): vm for vm in fresh_vms} if fresh_vms else {}
-    for r in results:
-        vm_info = vm_map.get(r.user_service_id, {})
-        remain = vm_info.get("remainDurationTime")
-        db.execute(
-            "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
-            "vm_status, remain_duration_time, error_message, vm_status_before, booted, executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (aid, r.vm_name, r.user_service_id, "success" if r.success else "failed", r.cag_code,
-             vm_info.get("vmStatusShow", ""),
-             str(remain) if remain is not None else None,
-             r.error or None, r.vm_status_before, int(r.booted), now),
-        )
-    db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
-    db.commit()
+    def _bg():
+        from scheduler import _run_keepalive
+        _run_keepalive(aid, username, password, db_path, hold, max_workers=manual_workers)
 
-    def _fmt(r):
-        boot = "🖥" if r.booted else ""
-        status = f"[{r.vm_status_before}]" if r.vm_status_before else ""
-        ok = "✅" if r.success else "❌"
-        return f"{r.vm_name}{status}: {ok}{boot}"
-    msg = " | ".join(_fmt(r) for r in results)
+    threading.Thread(target=_bg, daemon=True).start()
+    msg = f"保活已在后台执行（低并发 {manual_workers} 台/批），稍后刷新日志查看结果"
+
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return jsonify({"success": status == "success", "msg": msg})
-    flash(f"保活完成: {msg}", "success" if status == "success" else "warning")
+        return jsonify({"success": True, "msg": msg})
+    flash(msg, "info")
     return redirect(url_for("main.account_detail", aid=aid))
 
 

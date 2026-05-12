@@ -1,11 +1,15 @@
 import unittest
+import threading
+import time
 from unittest.mock import patch
 
 from webapp.keepalive_core import (
     _CH_MAIN,
+    KeepaliveResult,
     _parse_spice_link_reply,
     _scg_client_header,
     _spice_link_mess,
+    keepalive_account,
 )
 
 
@@ -52,6 +56,34 @@ class SCGProtocolLayoutTests(unittest.TestCase):
         self.assertTrue(reply["pub_key_der"].startswith(bytes.fromhex("30819f30")))
         self.assertEqual(reply["common_caps"], [0x0B])
         self.assertEqual(reply["channel_caps"], [0x09])
+
+    def test_keepalive_account_respects_manual_worker_limit(self):
+        vms = [{"userServiceId": i, "vmName": f"vm-{i}"} for i in range(5)]
+        lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def fake_keepalive_single_vm(_client, vm, *_args):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+            return KeepaliveResult(
+                vm_name=vm["vmName"],
+                user_service_id=int(vm["userServiceId"]),
+                success=True,
+            )
+
+        with patch("webapp.keepalive_core.soho_login", return_value=object()), \
+             patch("webapp.keepalive_core.fetch_vm_list", side_effect=[vms, vms]), \
+             patch("webapp.keepalive_core.keepalive_single_vm", side_effect=fake_keepalive_single_vm):
+            results, _ = keepalive_account("user", "pass", max_workers=2)
+
+        self.assertEqual(len(results), len(vms))
+        self.assertLessEqual(max_active, 2)
 
 
 if __name__ == "__main__":

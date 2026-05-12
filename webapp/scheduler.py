@@ -17,7 +17,8 @@ LOG = logging.getLogger("scheduler")
 scheduler = BackgroundScheduler(daemon=True, job_defaults={"coalesce": True, "max_instances": 1})
 
 
-def _run_keepalive(account_id: int, username: str, password: str, db_path: str, hold: int = 10):
+def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
+                   hold: int = 10, max_workers: int = 8):
     """后台任务：执行保活并写日志 + 刷新 VM 状态到数据库"""
     LOG.info("[%s] 执行保活", username)
     # 检查是否到期
@@ -41,7 +42,9 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str, 
     conn_vm.close()
 
     try:
-        results, fresh_vms = keepalive_account(username, password, hold=hold, skip_usids=disabled_usids)
+        results, fresh_vms = keepalive_account(
+            username, password, hold=hold, skip_usids=disabled_usids, max_workers=max_workers
+        )
     except Exception as e:
         LOG.error("[%s] 保活异常: %s", username, e)
         conn = sqlite3.connect(db_path)

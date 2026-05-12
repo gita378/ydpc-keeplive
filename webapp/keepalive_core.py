@@ -1316,7 +1316,7 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
 
 
 def keepalive_account(username: str, password: str, hold: int = 10, timeout: int = 10,
-                      skip_usids: set = None) -> tuple:
+                      skip_usids: set = None, max_workers: int = 8) -> tuple:
     """对一个账号下所有云电脑做保活，返回 (results, fresh_vms)
     skip_usids: 跳过这些 userServiceId 的 VM（单台关闭保活）
     """
@@ -1333,8 +1333,12 @@ def keepalive_account(username: str, password: str, hold: int = 10, timeout: int
         if skipped:
             LOG.info("[%s] 跳过 %d 台已关闭保活的 VM", username, skipped)
 
-        # 并发保活 (最多 8 线程)
-        with ThreadPoolExecutor(max_workers=min(8, len(todo) or 1)) as pool:
+        try:
+            worker_limit = max(1, int(max_workers))
+        except (TypeError, ValueError):
+            worker_limit = 8
+
+        with ThreadPoolExecutor(max_workers=min(worker_limit, len(todo) or 1)) as pool:
             futures = {
                 pool.submit(keepalive_single_vm, client, vm, hold, timeout): vm
                 for vm in todo

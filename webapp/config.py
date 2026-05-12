@@ -20,6 +20,7 @@ class Config:
     SECRET_KEY = _secret
     DATABASE = os.path.join(BASE_DIR, "cloudpc.db")
     HOLD_SECONDS = 10
+    MANUAL_KEEPALIVE_WORKERS = 2
     TIMEOUT = 10
     DEFAULT_ADMIN_USER = "admin"
     DEFAULT_ADMIN_PASS = "admin123"
