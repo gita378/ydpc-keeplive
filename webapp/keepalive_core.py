@@ -351,6 +351,10 @@ _SC_RSA_PK_SDK2 = (
 )
 
 
+_sc_token_cache: dict = {}
+_SC_TOKEN_TTL = 3600
+
+
 def _sc_rsa_encrypt_vmid(vm_id: str) -> str:
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
     from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
@@ -397,18 +401,26 @@ def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int 
             h["Authorization"] = f"Bearer {token}"
         return h
 
-    # 1. OAuth token
-    r = sess.post(f"{_SC_BASE_URL}/gzs/auth/oauth/token", data={
-        "grant_type": "ext", "client_id": _SC_CLIENT_ID,
-        "bizCode": biz_code, "token": sc_auth, "source": "biz",
-    }, headers=sc_headers(ct="application/x-www-form-urlencoded"), timeout=15, verify=False)
-    td = r.json()
-    token_data = td.get("data") or td
-    if not token_data.get("access_token"):
-        return False, f"SC OAuth 失败: {td.get('message', td.get('code'))}"
-    access_token = token_data["access_token"]
+    # 1. OAuth token (缓存复用)
+    cache_key = f"sc_{vm_id}"
+    now = time.time()
+    cached = _sc_token_cache.get(cache_key)
+    access_token = None
+    if cached and now - cached[1] < _SC_TOKEN_TTL:
+        access_token = cached[0]
+    if not access_token:
+        r = sess.post(f"{_SC_BASE_URL}/gzs/auth/oauth/token", data={
+            "grant_type": "ext", "client_id": _SC_CLIENT_ID,
+            "bizCode": biz_code, "token": sc_auth, "source": "biz",
+        }, headers=sc_headers(ct="application/x-www-form-urlencoded"), timeout=15, verify=False)
+        td = r.json()
+        token_data = td.get("data") or td
+        if not token_data.get("access_token"):
+            return False, f"SC OAuth 失败: {td.get('message', td.get('code'))}"
+        access_token = token_data["access_token"]
+        _sc_token_cache[cache_key] = (access_token, now)
 
-    # 2. getConnectInfo (触发开机)
+    # 2. getConnectInfo (触发开机/保活)
     encrypted_vmid = _sc_rsa_encrypt_vmid(vm_id)
     r = sess.post(f"{_SC_BASE_URL}/sc/open-portal/openapi/terminal/v1/getConnectInfo",
                   data=json.dumps({"vmId": encrypted_vmid}, separators=(",", ":")),
@@ -692,8 +704,15 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
             else:
                 LOG.warning("[%s] SC自动开机失败: %s", name, boot_msg)
 
-        LOG.info("[%s] 非ZTE云电脑(spuCode=%s)，使用v1心跳保活", name, vm.get("spuCode", "?"))
+        LOG.info("[%s] SC云电脑(spuCode=%s)，getConnectInfo+heartbeat保活", name, vm.get("spuCode", "?"))
         try:
+            # SC 云电脑: getConnectInfo 才能真正保活(heartbeat 只保 SOHO 在线)
+            if sc_auth:
+                try:
+                    _sc_boot_vm(client, auth, usid, timeout=90)
+                    LOG.info("[%s] SC getConnectInfo 保活成功", name)
+                except Exception as e:
+                    LOG.warning("[%s] SC getConnectInfo 保活失败: %s", name, e)
             client.heartbeat_v1(usid)
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
@@ -703,7 +722,7 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
         except Exception as e:
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
-                success=False, error=f"heartbeat_v1失败: {e}",
+                success=False, error=f"SC保活失败: {e}",
                 vm_status_before=status_show, booted=booted,
             )
 
