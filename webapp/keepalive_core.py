@@ -817,53 +817,46 @@ def _tls_recv_all(tls_sock, timeout=5.0) -> bytes:
     return buf
 
 
-def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
-                  vm_id: str, hold: float = 2.0) -> bool:
-    """
-    SCG 协议级保活 — 完整流程:
-    TCP → AES认证 → TLS → Welcome → SPICE main握手 → SPICE display握手 → DISPLAY_INIT → hold
-    """
+# 后台 SCG 长连接管理
+import threading
+_scg_connections: dict = {}   # vm_id → {"thread": Thread, "alive": bool, "since": float}
+_scg_lock = threading.Lock()
+
+
+def _scg_hold_loop(scg_ip: str, scg_port: int, sc_auth_code: str,
+                   vm_id: str, duration: float):
+    """后台线程: 保持 SCG 连接 duration 秒"""
     tag = f"[SCG vm={vm_id}]"
     sock = None
     tls_sock = None
     try:
-        # 1. TCP + AES 认证
-        LOG.info("%s Connecting %s:%d ...", tag, scg_ip, scg_port)
         sock = socket.create_connection((scg_ip, scg_port), timeout=15)
         sock.settimeout(15)
-        auth_pkt = _build_scg_auth_packet(sc_auth_code, vm_id)
-        sock.sendall(auth_pkt)
-
+        sock.sendall(_build_scg_auth_packet(sc_auth_code, vm_id))
         resp = _recv_exact(sock, 128)
         if resp[0] != 0x00:
             LOG.error("%s Auth FAILED: 0x%02x", tag, resp[0])
-            return False
-        LOG.info("%s Auth OK", tag)
+            return
 
-        # 2. TLS
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         tls_sock = ctx.wrap_socket(sock, server_hostname=scg_ip)
 
-        # 3. Welcome
         tls_sock.settimeout(10)
         welcome = tls_sock.recv(4096)
         if len(welcome) < 24:
-            LOG.error("%s Welcome too short", tag)
-            return False
+            return
         session_id = struct.unpack_from("<Q", welcome, 8)[0]
-        LOG.info("%s Welcome session_id=%d", tag, session_id)
+        LOG.info("%s Connected, session=%d, holding %ds", tag, session_id, int(duration))
 
-        # 4. 发送 SCG 通道注册 (告诉 SCG 我们是 main channel 客户端)
         scg_hdr = _scg_client_header(session_id, _CH_MAIN)
         tls_sock.sendall(scg_hdr)
-        LOG.info("%s SCG channel registered (main)", tag)
 
-        # 5. 保持连接，消费控制帧
-        tls_sock.settimeout(2)
-        deadline = time.time() + hold
+        # 长时间保持连接，消费控制帧
+        tls_sock.settimeout(30)
+        deadline = time.time() + duration
         while time.time() < deadline:
             try:
                 data = tls_sock.recv(4096)
@@ -871,13 +864,11 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
                     break
             except (socket.timeout, BlockingIOError):
                 pass
-
-        LOG.info("%s Keepalive completed (%.0fs)", tag, hold)
-        return True
-
+            except Exception:
+                break
+        LOG.info("%s Hold completed", tag)
     except Exception as e:
-        LOG.error("%s Error: %s", tag, e)
-        return False
+        LOG.error("%s Hold error: %s", tag, e)
     finally:
         if tls_sock:
             try: tls_sock.close()
@@ -885,6 +876,54 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
         elif sock:
             try: sock.close()
             except: pass
+        with _scg_lock:
+            _scg_connections.pop(vm_id, None)
+
+
+def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
+                  vm_id: str, hold: float = 2.0) -> bool:
+    """
+    SCG 协议级保活 — 在后台线程保持长连接。
+    如果已有活跃连接，跳过；否则启动新的后台连接，保持到下次保活周期。
+    hold 参数仅用于同步验证认证是否成功。
+    """
+    tag = f"[SCG vm={vm_id}]"
+
+    # 已有活跃连接，跳过
+    with _scg_lock:
+        existing = _scg_connections.get(vm_id)
+        if existing and existing["thread"].is_alive():
+            LOG.info("%s 已有活跃连接(since %.0fs ago)，跳过", tag, time.time() - existing["since"])
+            return True
+
+    # 先短连接验证认证能否成功
+    sock = None
+    tls_sock = None
+    try:
+        sock = socket.create_connection((scg_ip, scg_port), timeout=15)
+        sock.settimeout(15)
+        sock.sendall(_build_scg_auth_packet(sc_auth_code, vm_id))
+        resp = _recv_exact(sock, 128)
+        if resp[0] != 0x00:
+            LOG.error("%s Auth FAILED: 0x%02x", tag, resp[0])
+            return False
+        LOG.info("%s Auth OK", tag)
+    except Exception as e:
+        LOG.error("%s Error: %s", tag, e)
+        return False
+    finally:
+        if sock:
+            try: sock.close()
+            except: pass
+
+    # 认证成功，启动后台长连接 (保持 10 分钟)
+    t = threading.Thread(target=_scg_hold_loop, daemon=True,
+                         args=(scg_ip, scg_port, sc_auth_code, vm_id, 600))
+    t.start()
+    with _scg_lock:
+        _scg_connections[vm_id] = {"thread": t, "alive": True, "since": time.time()}
+    LOG.info("%s 后台长连接已启动 (600s)", tag)
+    return True
 
 
 def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout: int = 10,
