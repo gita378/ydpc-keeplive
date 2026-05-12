@@ -464,7 +464,13 @@ def _sc_get_connect_info(auth_data: dict, timeout: int = 30) -> dict:
                   data=json.dumps({"vmId": encrypted_vmid}, separators=(",", ":")),
                   headers=_sc_headers(token=access_token), timeout=timeout, verify=False)
     ci = r.json()
-    LOG.info("[SC] getConnectInfo response: %s", json.dumps(ci, ensure_ascii=False, default=str)[:1000])
+    ci_log = dict(ci)
+    if isinstance(ci_log.get("data"), dict):
+        data_log = dict(ci_log["data"])
+        if data_log.get("scAuthCode"):
+            data_log["scAuthCode"] = "present"
+        ci_log["data"] = data_log
+    LOG.info("[SC] getConnectInfo response: %s", json.dumps(ci_log, ensure_ascii=False, default=str)[:1000])
     if ci.get("code") != "00000":
         return {}
     data = ci.get("data", {})
@@ -734,20 +740,76 @@ def _build_scg_auth_packet(sc_auth_code: str, vm_id: str) -> bytes:
 _SPICE_MAGIC = 0x51444552  # "REDQ"
 _CH_MAIN = 1
 _CH_DISPLAY = 2
-_SPICE_COMMON_CAP = (1 << 0) | (1 << 1) | (1 << 3)  # AUTH_SELECTION | AUTH_SPICE | MINI_HEADER
+_SPICE_COMMON_CAP = (1 << 0) | (1 << 3)  # AUTH_SELECTION | MINI_HEADER (matches real SCG client)
 
 # SCG 通道类型映射 (来自 hy_send_scg_header 逆向)
 _SCG_CH_MAP = {_CH_DISPLAY: 1, 5: 2, 3: 3, _CH_MAIN: 4, 4: 6, 6: 7}
 
 
-def _scg_client_header(session_id: int, spice_channel: int) -> bytes:
+@dataclass
+class _ChuanyunFrame:
+    msg_type: int
+    payload: bytes
+    session_id: int
+    channel_id: int
+
+
+def _coerce_u64(value: Any, field: str) -> int:
+    try:
+        out = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be numeric, got {value!r}") from exc
+    if not 0 <= out <= 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"{field} out of u64 range: {value!r}")
+    return out
+
+
+def _chuanyun_head(session_id: int, msg_type: int, payload_len: int, channel_id: int = 0) -> bytes:
+    """Build the 24-byte ChuanyunHead wrapper."""
+    h = bytearray(24)
+    h[0] = 0x01
+    h[1] = msg_type & 0xFF
+    struct.pack_into("<H", h, 2, payload_len & 0xFFFF)
+    struct.pack_into("<Q", h, 8, _coerce_u64(session_id, "session_id"))
+    struct.pack_into("<Q", h, 16, _coerce_u64(channel_id, "channel_id"))
+    return bytes(h)
+
+
+def _send_chuanyun_frame(tls_sock, session_id: int, msg_type: int, payload: bytes, channel_id: int = 0) -> None:
+    tls_sock.sendall(_chuanyun_head(session_id, msg_type, len(payload), channel_id) + payload)
+
+
+def _recv_chuanyun_frame(tls_sock, timeout: float = 5.0) -> _ChuanyunFrame:
+    tls_sock.settimeout(timeout)
+    head = _recv_exact(tls_sock, 24)
+    if head[0] != 0x01:
+        raise RuntimeError(f"bad Chuanyun version: 0x{head[0]:02x}, head={head.hex()}")
+    payload_len = struct.unpack_from("<H", head, 2)[0]
+    payload = _recv_exact(tls_sock, payload_len) if payload_len else b""
+    return _ChuanyunFrame(
+        msg_type=head[1],
+        payload=payload,
+        session_id=struct.unpack_from("<Q", head, 8)[0],
+        channel_id=struct.unpack_from("<Q", head, 16)[0],
+    )
+
+
+def _build_scg_ctrl_payload(counter: int = 0) -> bytes:
+    payload = bytearray(128)
+    struct.pack_into("<I", payload, 0, 44)
+    if counter:
+        struct.pack_into("<I", payload, 4, counter & 0xFFFFFFFF)
+    return bytes(payload)
+
+
+def _scg_client_header(vm_id: Any, spice_channel: int) -> bytes:
     """
     客户端→服务端 SCG 头 (TLV 格式, 来自 hy_send_scg_header 逆向):
       [0]     version = 0x01
       [1:3]   info_len (BE u16)
       [3]     0xF3 (TLV type: vm_id)
       [4:6]   0x0800 (BE u16, value长度=8)
-      [6:14]  session_id (BE u64)
+      [6:14]  vm_id (BE u64) — not the Chuanyun session id
       [14]    0xF1 (TLV type: service_id)
       [15:17] 0x0100 (BE u16, value长度=1)
       [17]    0x01
@@ -765,7 +827,7 @@ def _scg_client_header(session_id: int, spice_channel: int) -> bytes:
     buf += struct.pack(">H", info_len)              # info_len BE
     buf += struct.pack("B", 0xF3)                   # TLV type: vm_id
     buf += struct.pack(">H", 8)                     # length = 8
-    buf += struct.pack(">Q", session_id)            # session_id BE
+    buf += struct.pack(">Q", _coerce_u64(vm_id, "vm_id"))  # vm_id BE
     buf += struct.pack("B", 0xF1)                   # TLV type: service_id
     buf += struct.pack(">H", 1)                     # length = 1
     buf += struct.pack("B", 0x01)                   # value = 1
@@ -778,7 +840,10 @@ def _scg_client_header(session_id: int, spice_channel: int) -> bytes:
 
 def _spice_link_mess(channel_type: int, channel_id: int, connection_id: int) -> bytes:
     """构建完整 SpiceLinkMess: random_tokens(16) + header(16) + mess + caps"""
-    channel_caps = 0x1052 if channel_type == _CH_DISPLAY else 0
+    # 从真实客户端抓包: main=0x0F, display=0x01893F, playback=0x06, record=0x02.
+    # inputs/cursor 没有 channel-specific caps，只有 common caps 0x09。
+    _CH_CAPS = {_CH_MAIN: 0x0F, _CH_DISPLAY: 0x01893F, 5: 0x06, 6: 0x02}
+    channel_caps = _CH_CAPS.get(channel_type, 0)
     num_common = 1
     num_ch = 1 if channel_caps else 0
     caps_offset = 18  # sizeof(SpiceLinkMess) = 4+1+1+4+4+4 = 18
@@ -794,6 +859,85 @@ def _spice_link_mess(channel_type: int, channel_id: int, connection_id: int) -> 
     if num_ch:
         buf += struct.pack("<I", channel_caps)            # channel caps
     return bytes(buf)
+
+
+def _parse_spice_link_reply(data: bytes) -> dict:
+    """Parse a SPICE LinkReply, with or without the 16-byte SCG random prefix."""
+    magic = struct.pack("<I", _SPICE_MAGIC)
+    magic_pos = data.find(magic)
+    if magic_pos < 0:
+        raise ValueError(f"SPICE LinkReply magic not found, data={data[:32].hex()}")
+    data = data[magic_pos:]
+    if len(data) < 20:
+        raise ValueError(f"SPICE LinkReply too short: {len(data)}")
+    link_magic, major, minor, size = struct.unpack_from("<IIII", data, 0)
+    if link_magic != _SPICE_MAGIC:
+        raise ValueError(f"bad SPICE magic 0x{link_magic:08x}")
+    if len(data) < 16 + size:
+        raise ValueError(f"SPICE LinkReply incomplete: need {16 + size}, got {len(data)}")
+
+    body = data[16:16 + size]
+    if len(body) < 4:
+        raise ValueError(f"SPICE LinkReply body too short: {len(body)}")
+    error = struct.unpack_from("<I", body, 0)[0]
+
+    pub_start = 4
+    pub_len = 162
+    if len(body) > pub_start + 2 and body[pub_start] == 0x30:
+        first_len = body[pub_start + 1]
+        if first_len < 0x80:
+            pub_len = 2 + first_len
+        else:
+            len_bytes = first_len & 0x7F
+            if 0 < len_bytes <= 4 and pub_start + 2 + len_bytes <= len(body):
+                der_len = int.from_bytes(body[pub_start + 2:pub_start + 2 + len_bytes], "big")
+                pub_len = 2 + len_bytes + der_len
+
+    pub_end = min(len(body), pub_start + pub_len)
+    pub_key = body[pub_start:pub_end]
+    fields_off = pub_end
+    if fields_off + 12 <= len(body):
+        num_common, num_channel, caps_offset = struct.unpack_from("<III", body, fields_off)
+    else:
+        num_common = num_channel = caps_offset = 0
+
+    common_caps: list[int] = []
+    channel_caps: list[int] = []
+    if 0 <= caps_offset <= len(body):
+        max_words = (len(body) - caps_offset) // 4
+        common_count = min(num_common, max_words)
+        channel_count = min(num_channel, max(0, max_words - common_count))
+        for i in range(common_count):
+            common_caps.append(struct.unpack_from("<I", body, caps_offset + i * 4)[0])
+        ch_base = caps_offset + common_count * 4
+        for i in range(channel_count):
+            channel_caps.append(struct.unpack_from("<I", body, ch_base + i * 4)[0])
+
+    return {
+        "major": major,
+        "minor": minor,
+        "size": size,
+        "error": error,
+        "pub_key_der": pub_key,
+        "common_caps": common_caps,
+        "channel_caps": channel_caps,
+        "raw": data[:16 + size],
+    }
+
+
+def _spice_mini(msg_type: int, payload: bytes = b"") -> bytes:
+    return struct.pack("<HI", msg_type, len(payload)) + payload
+
+
+def _iter_spice_minis(payload: bytes):
+    off = 0
+    while off + 6 <= len(payload):
+        msg_type, size = struct.unpack_from("<HI", payload, off)
+        end = off + 6 + size
+        if end > len(payload):
+            break
+        yield msg_type, payload[off + 6:end]
+        off = end
 
 
 def _spice_auth_ticket(rsa_pubkey_der: bytes) -> bytes:
@@ -851,27 +995,150 @@ def _scg_hold_loop(scg_ip: str, scg_port: int, sc_auth_code: str,
         tls_sock = ctx.wrap_socket(sock, server_hostname=scg_ip)
 
         # 3. Welcome
-        tls_sock.settimeout(10)
-        welcome = tls_sock.recv(4096)
-        if len(welcome) < 24:
-            return
-        session_id = struct.unpack_from("<Q", welcome, 8)[0]
-        LOG.info("%s session=%d, holding connection", tag, session_id)
+        welcome = _recv_chuanyun_frame(tls_sock, 10)
+        if welcome.msg_type != 2:
+            raise RuntimeError(f"expected welcome CTRL frame, got type={welcome.msg_type}")
+        session_id = welcome.session_id
+        vm_u64 = _coerce_u64(vm_id, "vm_id")
+        LOG.info("%s session=%d vm_id=%d, starting XE+SPICE handshake", tag, session_id, vm_u64)
 
-        scg_hdr = _scg_client_header(session_id, _CH_MAIN)
-        tls_sock.sendall(scg_hdr)
+        def cy_send(typ: int, payload: bytes, ch_id: int = 0) -> None:
+            _send_chuanyun_frame(tls_sock, session_id, typ, payload, ch_id)
 
-        # 保持连接，消费控制帧
-        tls_sock.settimeout(30)
+        def cy_recv_frame(timeout: float = 5.0) -> _ChuanyunFrame:
+            frame = _recv_chuanyun_frame(tls_sock, timeout)
+            if frame.msg_type == 3:
+                code = struct.unpack_from("<I", frame.payload, 0)[0] if len(frame.payload) >= 4 else None
+                raise RuntimeError(
+                    f"server CLOSE ch={frame.channel_id} code={code} payload={frame.payload[:64].hex()}"
+                )
+            return frame
+
+        def wait_data(ch_id: int, timeout: float, *, contains: bytes | None = None,
+                      mini_type: int | None = None) -> tuple[_ChuanyunFrame, bytes | None]:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                remain = max(0.1, deadline - time.time())
+                frame = cy_recv_frame(remain)
+                if frame.msg_type == 2:
+                    LOG.debug("%s recv CTRL len=%d", tag, len(frame.payload))
+                    continue
+                if frame.msg_type != 1 or frame.channel_id != ch_id:
+                    LOG.debug(
+                        "%s skip frame type=%d ch=%d len=%d waiting ch=%d",
+                        tag, frame.msg_type, frame.channel_id, len(frame.payload), ch_id,
+                    )
+                    continue
+                if contains is not None and contains not in frame.payload:
+                    continue
+                if mini_type is not None:
+                    for mt, body in _iter_spice_minis(frame.payload):
+                        if mt == mini_type:
+                            return frame, body
+                    continue
+                return frame, None
+            raise TimeoutError(f"timeout waiting DATA ch={ch_id} contains={contains!r} mini={mini_type}")
+
+        def wait_auth_result(ch_id: int, timeout: float = 5.0) -> int:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                frame, _ = wait_data(ch_id, max(0.1, deadline - time.time()))
+                if len(frame.payload) == 4:
+                    return struct.unpack_from("<I", frame.payload, 0)[0]
+                LOG.debug("%s non-auth DATA ch=%d len=%d", tag, ch_id, len(frame.payload))
+            raise TimeoutError(f"timeout waiting auth result ch={ch_id}")
+
+        # 4. 发 ChuanyunConn CTRL 帧 (初始化！这是之前缺失的关键步骤)
+        cy_send(2, _build_scg_ctrl_payload())
+        LOG.info("%s CTRL init sent", tag)
+
+        # 收服务端 CTRL 回复
+        ctrl_reply = cy_recv_frame(5)
+        LOG.info("%s CTRL reply type=%d len=%d", tag, ctrl_reply.msg_type, len(ctrl_reply.payload))
+
+        # 5. SPICE main channel (channel_id=1)
+        scg_hdr = _scg_client_header(vm_id, _CH_MAIN)
+        cy_send(1, scg_hdr, ch_id=1)
+
+        redq = _spice_link_mess(_CH_MAIN, 0, 0)
+        cy_send(1, redq, ch_id=1)
+
+        # 收 LinkReply
+        main_reply_frame, _ = wait_data(1, 8, contains=struct.pack("<I", _SPICE_MAGIC))
+        main_reply = _parse_spice_link_reply(main_reply_frame.payload)
+        if main_reply["error"] != 0:
+            raise RuntimeError(f"SPICE main LinkReply error={main_reply['error']}")
+        LOG.info(
+            "%s SPICE main LinkReply OK caps=%s/%s",
+            tag, main_reply["common_caps"], main_reply["channel_caps"],
+        )
+
+        # Auth selection + RSA ticket
+        cy_send(1, struct.pack("<I", 1), ch_id=1)
+        cy_send(1, _spice_auth_ticket(main_reply["pub_key_der"]), ch_id=1)
+        auth_result = wait_auth_result(1, 8)
+        if auth_result != 0:
+            raise RuntimeError(f"SPICE main auth failed result={auth_result}")
+        LOG.info("%s SPICE main auth OK", tag)
+
+        _, main_init = wait_data(1, 8, mini_type=0x67)
+        spice_sid = struct.unpack_from("<I", main_init, 0)[0] if main_init and len(main_init) >= 4 else 0
+        LOG.info("%s MAIN_INIT spice_session=%d", tag, spice_sid)
+
+        # 官方客户端随后会发送客户端信息和 attach-channel 请求；不发时部分网关不会继续下发通道状态。
+        cy_send(1, _spice_mini(0x72, struct.pack("<IIIII", 16, 100, 8, vm_u64 & 0xFFFFFFFF, 0)), ch_id=1)
+        attach = _spice_mini(0x6A, struct.pack("<I", 0xFFFFFFFF))
+        monitors = _spice_mini(0x6B, struct.pack("<IIIIIII", 1, 6, 0, 0, 8, 1, 0))
+        cy_send(1, attach + monitors, ch_id=1)
+        try:
+            wait_data(1, 2, mini_type=0x68)
+        except TimeoutError:
+            LOG.debug("%s MAIN_CHANNELS_LIST not seen before display open", tag)
+
+        # 6. SPICE display channel (Chuanyun channel_id=2)
+        scg_hdr2 = _scg_client_header(vm_id, _CH_DISPLAY)
+        cy_send(1, scg_hdr2, ch_id=2)
+        redq2 = _spice_link_mess(_CH_DISPLAY, 0, spice_sid)
+        cy_send(1, redq2, ch_id=2)
+
+        display_reply_frame, _ = wait_data(2, 8, contains=struct.pack("<I", _SPICE_MAGIC))
+        display_reply = _parse_spice_link_reply(display_reply_frame.payload)
+        if display_reply["error"] != 0:
+            raise RuntimeError(f"SPICE display LinkReply error={display_reply['error']}")
+        LOG.info(
+            "%s SPICE display LinkReply OK caps=%s/%s",
+            tag, display_reply["common_caps"], display_reply["channel_caps"],
+        )
+        cy_send(1, struct.pack("<I", 1), ch_id=2)
+        cy_send(1, _spice_auth_ticket(display_reply["pub_key_der"]), ch_id=2)
+        display_auth = wait_auth_result(2, 8)
+        if display_auth != 0:
+            raise RuntimeError(f"SPICE display auth failed result={display_auth}")
+
+        # 7. DISPLAY_INIT — 保活的关键！
+        di = struct.pack("B", 1) + struct.pack("<q", 20 * 1024 * 1024) + \
+             struct.pack("B", 1) + struct.pack("<i", 3 * 1024 * 1024)
+        cy_send(1, _spice_mini(0x65, di), ch_id=2)
+        LOG.info("%s DISPLAY_INIT sent", tag)
+
+        # 8. 保持连接
         deadline = time.time() + duration
+        next_ctrl = time.time() + 1.0
         while time.time() < deadline:
             try:
-                data = tls_sock.recv(4096)
-                if not data:
-                    break
+                frame = cy_recv_frame(1.0)
+                if frame.msg_type == 1:
+                    for msg_type, body in _iter_spice_minis(frame.payload):
+                        if msg_type == 0x04:  # server PING
+                            cy_send(1, _spice_mini(0x03, body), ch_id=frame.channel_id)
+                if time.time() >= next_ctrl:
+                    cy_send(2, _build_scg_ctrl_payload(int(time.monotonic() * 1000)), ch_id=0)
+                    next_ctrl = time.time() + 1.0
             except (socket.timeout, BlockingIOError):
-                pass
+                cy_send(2, _build_scg_ctrl_payload(int(time.monotonic() * 1000)), ch_id=0)
+                next_ctrl = time.time() + 1.0
             except Exception:
+                LOG.exception("%s Hold loop stopped", tag)
                 break
         LOG.info("%s Hold completed", tag)
     except Exception as e:
@@ -996,8 +1263,8 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
                         success=True, vm_status_before=status_show, booted=booted,
                     )
 
-                LOG.info("[%s] SCG参数: ip=%s port=%d vmId=%s authCode=%s...",
-                         name, scg_ip, scg_port, vm_id_str, fresh_auth[:40] if fresh_auth else "")
+                LOG.info("[%s] SCG参数: ip=%s port=%d vmId=%s authCode=%s",
+                         name, scg_ip, scg_port, vm_id_str, "present" if fresh_auth else "empty")
                 scg_ok = scg_keepalive(scg_ip, scg_port, fresh_auth, vm_id_str, hold=2)
                 if not scg_ok:
                     raise RuntimeError("SCG认证失败(resp!=0x00)")
