@@ -232,7 +232,7 @@
 </div>
 
 <script>
-var hdrs = {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'};
+function getHdrs() { return {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}; }
 
 /* ── 多选 ── */
 function toggleAll(el) {
@@ -264,7 +264,7 @@ function batchAction(action) {
     bar.style.opacity = '0.5';
     bar.style.pointerEvents = 'none';
 
-    fetch('{{ url_for("main.batch_action") }}', {method: 'POST', headers: hdrs, body: JSON.stringify(body)})
+    fetch('{{ url_for("main.batch_action") }}', {method: 'POST', headers: getHdrs(), body: JSON.stringify(body)})
         .then(r => r.json())
         .then(data => {
             bar.style.opacity = '1';
@@ -298,7 +298,7 @@ function editRemark(span, aid) {
     input.focus();
     function save() {
         const val = input.value.trim();
-        fetch(`/accounts/${aid}/remark`, {method:'POST', headers:{...hdrs, 'Content-Type':'application/x-www-form-urlencoded'}, body:'remark='+encodeURIComponent(val)})
+        fetch(`/accounts/${aid}/remark`, {method:'POST', headers:{...getHdrs(), 'Content-Type':'application/x-www-form-urlencoded'}, body:'remark='+encodeURIComponent(val)})
             .then(r=>r.json()).then(()=>{
                 const ns = document.createElement('span');
                 ns.className='remark-text'; ns.textContent=val;
@@ -314,7 +314,7 @@ function editRemark(span, aid) {
 /* ── 单行快捷按钮 ── */
 function doSingle(btn, orig) {
     btn.disabled=true; btn.textContent='⏳';
-    fetch(btn.dataset.url, {method:'POST', headers:hdrs})
+    fetch(btn.dataset.url, {method:'POST', headers:getHdrs()})
         .then(r=>r.json())
         .then(data=>{
             btn.disabled=false;
