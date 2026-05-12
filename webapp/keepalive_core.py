@@ -777,18 +777,22 @@ def _scg_client_header(session_id: int, spice_channel: int) -> bytes:
 
 
 def _spice_link_mess(channel_type: int, channel_id: int, connection_id: int) -> bytes:
+    """构建完整 SpiceLinkMess: random_tokens(16) + header(16) + mess + caps"""
     channel_caps = 0x1052 if channel_type == _CH_DISPLAY else 0
-    num_ch_caps = 1 if channel_caps else 0
-    msg_size = 18 + (1 + num_ch_caps) * 4
+    num_common = 1
+    num_ch = 1 if channel_caps else 0
+    caps_offset = 18  # sizeof(SpiceLinkMess) = 4+1+1+4+4+4 = 18
+    msg_size = caps_offset + (num_common + num_ch) * 4
+
     buf = bytearray()
-    buf += struct.pack("<III", _SPICE_MAGIC, 2, 2)
-    buf += struct.pack("<I", msg_size)
-    buf += struct.pack("<I", connection_id)
-    buf += struct.pack("BB", channel_type, channel_id)
-    buf += struct.pack("<HHI", 1, num_ch_caps, 18)
-    buf += struct.pack("<I", _SPICE_COMMON_CAP)
-    if num_ch_caps:
-        buf += struct.pack("<I", channel_caps)
+    buf += os.urandom(16)                                # 16B peer random tokens
+    buf += struct.pack("<IIII", _SPICE_MAGIC, 2, 2, msg_size)  # SpiceLinkHeader
+    buf += struct.pack("<I", connection_id)               # connection_id
+    buf += struct.pack("BB", channel_type, channel_id)    # channel info
+    buf += struct.pack("<III", num_common, num_ch, caps_offset)  # caps info (uint32 x3!)
+    buf += struct.pack("<I", _SPICE_COMMON_CAP)           # common caps
+    if num_ch:
+        buf += struct.pack("<I", channel_caps)            # channel caps
     return bytes(buf)
 
 
@@ -825,11 +829,12 @@ _scg_lock = threading.Lock()
 
 def _scg_hold_loop(scg_ip: str, scg_port: int, sc_auth_code: str,
                    vm_id: str, duration: float):
-    """后台线程: 保持 SCG 连接 duration 秒"""
+    """后台线程: 完整 SPICE 握手 + DISPLAY_INIT + 保持连接"""
     tag = f"[SCG vm={vm_id}]"
     sock = None
     tls_sock = None
     try:
+        # 1. TCP + AES auth
         sock = socket.create_connection((scg_ip, scg_port), timeout=15)
         sock.settimeout(15)
         sock.sendall(_build_scg_auth_packet(sc_auth_code, vm_id))
@@ -838,23 +843,25 @@ def _scg_hold_loop(scg_ip: str, scg_port: int, sc_auth_code: str,
             LOG.error("%s Auth FAILED: 0x%02x", tag, resp[0])
             return
 
+        # 2. TLS
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         tls_sock = ctx.wrap_socket(sock, server_hostname=scg_ip)
 
+        # 3. Welcome
         tls_sock.settimeout(10)
         welcome = tls_sock.recv(4096)
         if len(welcome) < 24:
             return
         session_id = struct.unpack_from("<Q", welcome, 8)[0]
-        LOG.info("%s Connected, session=%d, holding %ds", tag, session_id, int(duration))
+        LOG.info("%s session=%d, holding connection", tag, session_id)
 
         scg_hdr = _scg_client_header(session_id, _CH_MAIN)
         tls_sock.sendall(scg_hdr)
 
-        # 长时间保持连接，消费控制帧
+        # 保持连接，消费控制帧
         tls_sock.settimeout(30)
         deadline = time.time() + duration
         while time.time() < deadline:
@@ -918,11 +925,11 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
 
     # 认证成功，启动后台长连接 (保持 10 分钟)
     t = threading.Thread(target=_scg_hold_loop, daemon=True,
-                         args=(scg_ip, scg_port, sc_auth_code, vm_id, 600))
+                         args=(scg_ip, scg_port, sc_auth_code, vm_id, 240))
     t.start()
     with _scg_lock:
         _scg_connections[vm_id] = {"thread": t, "alive": True, "since": time.time()}
-    LOG.info("%s 后台长连接已启动 (600s)", tag)
+    LOG.info("%s 后台长连接已启动 (240s)", tag)
     return True
 
 
