@@ -1003,20 +1003,35 @@ def keepalive_account(username: str, password: str, hold: int = 10, timeout: int
     """对一个账号下所有云电脑做保活，返回 (results, fresh_vms)
     skip_usids: 跳过这些 userServiceId 的 VM（单台关闭保活）
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     results = []
     fresh_vms = []
     skip_usids = skip_usids or set()
     try:
         client = soho_login(username, password, timeout=timeout)
         vms = fetch_vm_list(client)
-        for vm in vms:
-            usid = int(vm.get("userServiceId", 0))
-            if usid in skip_usids:
-                LOG.info("[%s] %s 已关闭保活，跳过", username, vm.get("vmName", "?"))
-                continue
-            r = keepalive_single_vm(client, vm, hold=hold, timeout=timeout)
-            results.append(r)
-        # 保活完成后重新拉一次列表，刷新状态和剩余时长
+        todo = [vm for vm in vms if int(vm.get("userServiceId", 0)) not in skip_usids]
+        skipped = len(vms) - len(todo)
+        if skipped:
+            LOG.info("[%s] 跳过 %d 台已关闭保活的 VM", username, skipped)
+
+        # 并发保活 (最多 8 线程)
+        with ThreadPoolExecutor(max_workers=min(8, len(todo) or 1)) as pool:
+            futures = {
+                pool.submit(keepalive_single_vm, client, vm, hold, timeout): vm
+                for vm in todo
+            }
+            for f in as_completed(futures):
+                try:
+                    results.append(f.result())
+                except Exception as e:
+                    vm = futures[f]
+                    results.append(KeepaliveResult(
+                        vm_name=vm.get("vmName", "?"),
+                        user_service_id=int(vm.get("userServiceId", 0)),
+                        success=False, error=str(e),
+                    ))
         try:
             fresh_vms = fetch_vm_list(client)
         except Exception:
