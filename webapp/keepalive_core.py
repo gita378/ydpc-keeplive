@@ -297,7 +297,11 @@ def boot_vm(client: CloudPcClient, vm: dict, timeout: int = 30) -> tuple:
         auth_data = client.get_firm_auth(usid)
         cag_ip = str(auth_data.get("cagIp", "")).strip()
         if not cag_ip:
-            return False, f"{name}: 无cagIp(非ZTE云电脑)，无法开机"
+            sc_auth = auth_data.get("scAuthCode", "")
+            if sc_auth:
+                ok, msg = _sc_boot_vm(client, auth_data, usid, timeout=timeout)
+                return ok, f"{name}: {msg}"
+            return False, f"{name}: 无cagIp且无scAuthCode，无法开机"
         ok, msg = _csap_start_desktop(auth_data, timeout=timeout)
         if ok:
             return True, f"{name}: 开机成功"
@@ -305,6 +309,98 @@ def boot_vm(client: CloudPcClient, vm: dict, timeout: int = 30) -> tuple:
     except Exception as e:
         LOG.error("[boot] %s 开机失败: %s", name, e)
         return False, f"{name}: 开机失败 - {e}"
+
+
+# ── SC 家庭云电脑开机 (自包含) ──
+
+_SC_BASE_URL = "https://api.soho.komect.com:1443"
+_SC_CLIENT_ID = "sc-user-5e38ece5"
+_SC_RSA_PK_SDK2 = (
+    "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDRwADvpa+s20CapaSeDeWAfRKbK5zD91jIUx"
+    "NDe/2twuvKdQA+Ln3VWFtL8opVod0ebqQanpVb/uITI56GcoVdSzis2IgqIkVvN+iOPH+on/F"
+    "K+6EXYeIZn3MYmVxsmS0IVifVl2EGLeOCRMwjPmy9fHB+gByQtGnxAsknwBKUqQIDAQAB"
+)
+
+
+def _sc_rsa_encrypt_vmid(vm_id: str) -> str:
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+    from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
+    pem = b"-----BEGIN PUBLIC KEY-----\n" + _SC_RSA_PK_SDK2.encode() + b"\n-----END PUBLIC KEY-----\n"
+    pub = load_pem_public_key(pem, backend=default_backend())
+    encrypted = pub.encrypt(vm_id.encode(), rsa_padding.PKCS1v15())
+    return "{rsa}" + base64.urlsafe_b64encode(encrypted).decode().rstrip("=")
+
+
+def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int = 90) -> tuple:
+    """SC 家庭云电脑开机: OAuth → getConnectInfo → getVmReadyStatus"""
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    vm_id = str(auth_data["vmId"])
+    biz_code = auth_data.get("bizCode", "10002")
+    sc_auth = auth_data["scAuthCode"]
+
+    sess = requests.Session()
+    sess.trust_env = False
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.ssl_ import create_urllib3_context
+    import ssl as _ssl
+    class _A(HTTPAdapter):
+        def init_poolmanager(self, *a, **kw):
+            ctx = create_urllib3_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            kw["ssl_context"] = ctx
+            super().init_poolmanager(*a, **kw)
+    sess.mount("https://", _A())
+
+    def sc_headers(token=None, ct="application/json"):
+        h = {
+            "gzs-client-id": _SC_CLIENT_ID,
+            "gzs-timestamp": str(int(time.time() * 1000)),
+            "sc-terminal-sn": "keepalive-server",
+            "sc-unit-type": "Linux",
+            "sc-network-type": "2",
+            "User-Agent": "cdpsdk-server-1.0",
+            "Content-type": ct,
+        }
+        if token:
+            h["Authorization"] = f"Bearer {token}"
+        return h
+
+    # 1. OAuth token
+    r = sess.post(f"{_SC_BASE_URL}/gzs/auth/oauth/token", data={
+        "grant_type": "ext", "client_id": _SC_CLIENT_ID,
+        "bizCode": biz_code, "token": sc_auth, "source": "biz",
+    }, headers=sc_headers(ct="application/x-www-form-urlencoded"), timeout=15, verify=False)
+    td = r.json()
+    token_data = td.get("data") or td
+    if not token_data.get("access_token"):
+        return False, f"SC OAuth 失败: {td.get('message', td.get('code'))}"
+    access_token = token_data["access_token"]
+
+    # 2. getConnectInfo (触发开机)
+    encrypted_vmid = _sc_rsa_encrypt_vmid(vm_id)
+    r = sess.post(f"{_SC_BASE_URL}/sc/open-portal/openapi/terminal/v1/getConnectInfo",
+                  data=json.dumps({"vmId": encrypted_vmid}, separators=(",", ":")),
+                  headers=sc_headers(token=access_token), timeout=timeout, verify=False)
+    ci = r.json()
+    if ci.get("code") != "00000":
+        return False, f"getConnectInfo: {ci.get('message', ci.get('code'))}"
+
+    # 3. getVmReadyStatus
+    trace_id = ci.get("data", {}).get("traceId", "")
+    if trace_id:
+        r = sess.post(f"{_SC_BASE_URL}/sc/open-portal/openapi/terminal/v1/getVmReadyStatus",
+                      data=json.dumps({"vmId": encrypted_vmid, "traceId": trace_id}, separators=(",", ":")),
+                      headers=sc_headers(token=access_token), timeout=30, verify=False)
+        rs = r.json()
+        ready = rs.get("data", {}).get("readyStatus")
+        if ready == 1:
+            return True, "SC开机成功(ready=1)"
+        return True, f"SC开机已触发(ready={ready})"
+
+    return True, "SC开机已触发"
 
 
 # ── CSAP 开机实现 (自包含) ──

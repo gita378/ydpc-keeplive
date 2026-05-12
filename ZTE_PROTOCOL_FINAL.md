@@ -121,7 +121,7 @@ remainDurationTime (在 /cc/cloudPc/list/v6 返回)
 
 **文件: `cloudpc_protocol.py`** — 完整可运行
 ```bash
-python3 cloudpc_protocol.py --username zhaoboy3 --password 'ZXCzxc199692*'
+python3 cloudpc_protocol.py --username "$UN" --password "$PW"
 # 输出: bootstrap → login → list → getFirmAuth → 完整连接参数
 python3 cloudpc_protocol.py --selftest
 # 输出: ✓ PASS (签名验证)
@@ -699,13 +699,15 @@ CSAP 的 4 个 action 统一模式：所有业务参数在 query string，body �
 | 产品 | spuCode | 连接方式 | 保活 | 开机 |
 |------|---------|---------|------|------|
 | ZTE 云电脑 | `zte-cloud-pc` | CAG → ZTEC → KCP/UDT → SPICE | ZTEC 鉴权 + heartbeat ✅ | CSAP startDesktop ✅ |
-| 家庭云电脑 | `sc-cloud-pc` | SCG → JWAE/XE → SPICE | v1 heartbeat ✅ | SC API (部分完成) |
+| 家庭云电脑 | `sc-cloud-pc` | SCG → JWAE/XE → SPICE | v1 heartbeat ✅ | SC API getConnectInfo ✅ |
 
 ### 16.2 家庭云电脑保活
 
-`/cc/cloudPc/heartbeat/v2` 对 SC 云电脑返回 `4043 该云电脑已在其他设备上登录`。
+`/cc/cloudPc/heartbeat/v2` 对 SC 云电脑可能返回 `4043 该云电脑已在其他设备上登录`，也可能在无密码解锁态返回 `4041 当前云电脑处于解锁状态,且无密码`。官方 H5/SDK 日志里出现过 `4041`，客户端不把它当成连接流程的致命错误。
 
 发现 **v1 接口** `/cc/cloudPc/heartbeat/v1` 直接返回 SUCCESS，不检查设备冲突。22 台 VM 全部验证通过。
+
+当前 Python 脚本默认用 v1 做服务器保活；如需对齐官方行为，可通过参数切换到 v2。
 
 ### 16.3 SC API 协议栈
 
@@ -737,9 +739,9 @@ Headers:
   gzs-client-id: sc-user-5e38ece5       ← 固定值，从 SDK 日志中捕获
   gzs-timestamp: {毫秒时间戳}
   sc-terminal-sn: {设备序列号}
-  sc-unit-type: Mac
+  sc-unit-type: Mac17,9                 ← 2.18.23 新版实际值；旧版日志曾为 Mac
   sc-network-type: 2
-  User-Agent: cdpsdk-macos-2.18.21(2.18.21.159)
+  User-Agent: cdpsdk-macos-2.18.23(2.18.23.213)
 
 Body:
   grant_type=ext                         ← 自定义扩展 grant（非 password/authorization_code）
@@ -758,7 +760,7 @@ Body:
 4. 通过 IDA 反编译 `CloudComputerInterface.task.getter` 发现 `grant_type=ext`
 5. 从反编译代码确认 `token` 参数是 `connectAuthCode`（即 scAuthCode JWT）
 
-### 16.5 开机流程（部分完成）
+### 16.5 开机流程（已打通）
 
 **官方客户端日志证实的完整流程：**
 
@@ -768,7 +770,7 @@ Body:
    - 不需要调 handleVM！getConnectInfo 本身就是开机接口
    - 关机 VM 调用后约 56 秒返回
    - 响应包含 scgIP, scgPort, traceID
-3. getVmReadyStatus (vmId + traceId) → readyStatus=1 表示就绪
+3. getVmReadyStatus (RSA加密 vmId + 明文 traceId) → readyStatus=1 表示就绪
 4. 连接 JWAE → SCG → SPICE 桌面
 ```
 
@@ -780,23 +782,123 @@ Authorization: Bearer {access_token}
 gzs-client-id: sc-user-5e38ece5
 gzs-timestamp: {毫秒时间戳}
 
-Body: {"vmId": "{rsa}BASE64(RSA_PKCS1v15(vmIdString))"}
+Body: {"vmId": "{rsa}BASE64URL(RSA_PKCS1v15(vmIdString))"}
 ```
 
-### 16.6 未解决：RSA 加密兼容性
+**getVmReadyStatus 请求格式：**
+```
+POST /sc/open-portal/openapi/terminal/v1/getVmReadyStatus
+Content-Type: application/json
+Authorization: Bearer {access_token}
+gzs-client-id: sc-user-5e38ece5
+gzs-timestamp: {毫秒时间戳}
 
-Python `cryptography` 库的 RSA PKCS1v15 加密结果被服务端拒绝（`90010002 参数错误或解密失败`）。
+Body: {"vmId": "{rsa}BASE64URL(RSA_PKCS1v15(vmIdString))", "traceId": "{plain_traceId}"}
+```
 
-- RSA 公钥确认正确（API 返回值 == 二进制硬编码值）
+实测组合：
+
+| vmId | traceId | 结果 |
+|------|---------|------|
+| 明文 | 明文 | `90010002 参数错误或解密失败` |
+| RSA 加密 | RSA 加密 | token/session 相关错误 |
+| RSA 加密 | 明文 | `00000 readyStatus=1` |
+
+**官方日志对照：**
+
+```
+connectVMID: 960470
+base64ConnectVMID: kHkdr9lqXo3FhfnxwMneSW5D7txx07odgizAW6GfEXKv1w4VfYme9T6GTFdtPpNHpbTjfj8zSrQzZV3JbZalZasRZzQTfa7Vte6NUP2snEVSrn0LjpJOfz6kvvhyo3zuB20RH5ygIlGEDeoA87MPk5LAAzsyL4DUeOX1JFXle18
+```
+
+这个值长度是 **171 字符**。解码时补一个 `=` 后得到 **128 字节 RSA 密文**。
+
+2026-05-12 新日志进一步确认官方输出会包含 `-` 和 `_`，不是标准 base64 的 `+` 和 `/`。因此请求里的 `vmId` 不是保留 padding 的标准 base64，而是：
+
+```
+{rsa} + base64url(RSA_PKCS1v15(utf8(vmId))).rstrip("=")
+```
+
+### 16.6 RSA 加密兼容性结论
+
+之前 Python `cryptography` 库的 RSA PKCS1v15 加密结果被服务端拒绝（`90010002 参数错误或解密失败`）。结合 `/tmp/h5.log` 与 SDK 二进制复核后，根因不是 Python 的 RSA 实现，而是 **OpenPortal 使用另一把 SDK 内置公钥 `sdk2`**；base64url 去 padding 是另一个必须对齐的格式条件。
+
+- `/gzs/auth/oauth/rsa-public-key` 返回的是 `sdk1` 公钥，和 SDK 二进制第一把硬编码值一致
 - 加密算法确认正确（`kSecKeyAlgorithmRSAEncryptionPKCS1` = PKCS1v15）
-- Base64 编码格式确认正确（标准 base64，128 字节 → 172 字符）
+- 官方 SDK 输出 128 字节密文的 base64url 后去掉末尾 `=`，最终 171 字符
 - 官方 SDK 使用 SwiftyRSA → Apple Security framework
+- Python `cryptography` 和 macOS `Security.framework` 都能产出 128 字节密文；PKCS1v15 padding 随机，密文每次不同是正常现象
+- `/gzs/auth/oauth/rsa-public-key` 返回值和 SDK 内置第一个公钥 `sdk1` 一致，但用于 `getConnectInfo` 会返回 `90010002`
+- SDK 二进制内第二个内置 RSA 公钥 `sdk2` 才是 `getConnectInfo` 实际需要的 OpenPortal 公钥；脚本默认使用 `sdk2`
+- `getVmReadyStatus` 也必须继续使用同一个 `{rsa}BASE64URL(RSA_PKCS1v15(vmId))`，不能改回明文
+- `traceId` 来自 `getConnectInfo` 响应，保持明文发送
+- 官方日志成功样本 `connectVMID=960534`，脚本默认 `--vm-index 0` 未必选中同一台 SC VM；先用 `--list-sc --probe-firm-auth` 对齐 `firm_vmId`
+- 2026-05-12 `/tmp/h5.log` 成功样本显示 `userServiceId=37268191 -> vmId=960490`，SC SDK 头为 `sc-unit-type=Mac17,9`、`User-Agent=cdpsdk-macos-2.18.23(2.18.23.213)`
 
-**可能原因：**
-1. Python 和 Apple 的 PKCS1v15 padding 随机字节生成方式不同（不影响解密）
-2. 服务端可能不是用 RSA 私钥解密，而是用某种自定义算法
-3. 可能需要特定的 RSA padding 变体
+**当前落地脚本：** `cloudpc_sc_client.py`
 
-**下一步：**
-- 用 macOS 的 Security framework（通过 ctypes 调用）做 RSA 加密
-- 或者直接 hook 官方 SDK 的加密函数获取加密结果
+已实现：
+
+1. SOHO 登录复用 `cloudpc_protocol.py`
+2. 选择 `spuCode=sc-cloud-pc` 的家庭云电脑
+3. `getFirmAuth` 拿 `vmId` / `bizCode` / `scAuthCode`
+4. OAuth `grant_type=ext` 获取 access token
+5. 使用 SDK 内置 `sdk2` OpenPortal RSA 公钥
+6. `{rsa}` + RSA_PKCS1v15(vmId) + 去 padding base64url
+7. 可选调用 `getConnectInfo`
+8. 可选调用 `getVmReadyStatus`
+9. 可选 heartbeat 保活循环，默认 30 秒一跳
+
+默认不触发开机；必须显式加 `--connect-info`。
+
+列出家庭云电脑，并打印每台 `getFirmAuth` 返回的真实 `vmId`：
+
+```
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --list-sc --probe-firm-auth
+```
+
+只打印加密结果、不调用开机接口：
+
+```
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --print-only
+```
+
+调用 `getConnectInfo`，可能触发开机：
+
+```
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --connect-info --ready-status
+```
+
+开机后保持 10 分钟，每 30 秒发一次 heartbeat/v1，并查询 ready：
+
+```
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --connect-info --ready-status --keepalive-seconds 600 --heartbeat-interval 30
+```
+
+如需完全对齐官方 H5/SDK 的 v2 心跳：
+
+```
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --connect-info --ready-status --keepalive-seconds 600 --heartbeat-interval 30 --heartbeat-api v2
+```
+
+如果要复现旧错误或做 A/B 验证：
+
+```
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --public-key-profile api --connect-info
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --rsa-provider security --connect-info
+```
+
+如果要验证旧错误，可以切回标准 base64 或保留 `=` padding：
+
+```
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --standard-base64 --connect-info
+python3 cloudpc_sc_client.py --un "$UN" --pw "$PW" --keep-base64-padding --connect-info
+```
+
+官方客户端运行时抓 RSA 明文/密文：
+
+```
+frida -p <官方客户端PID> -l hook_sc_rsa_frida.js
+```
+
+保持 hook 运行后，在官方客户端点一次家庭云连接。输出里的 `plain_ascii` 应等于官方日志的 `connectVMID`，`cipher_b64url` 应等于官方日志的 `base64ConnectVMID`。
