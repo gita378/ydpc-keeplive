@@ -430,6 +430,20 @@ def keepalive_now(aid):
             return jsonify({"success": False, "msg": "账号不存在"}), 404
         return redirect(url_for("main.index"))
 
+    # AJAX 请求改为后台执行，避免 504 超时
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        import threading
+        db_path = current_app.config["DATABASE"]
+        hold = current_app.config.get("HOLD_SECONDS", 10)
+        username, password = account["username"], account["password"]
+        disabled = {r["user_service_id"] for r in
+                    db.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (aid,)).fetchall()}
+        def _bg():
+            from scheduler import _run_keepalive
+            _run_keepalive(aid, username, password, db_path, hold)
+        threading.Thread(target=_bg, daemon=True).start()
+        return jsonify({"success": True, "msg": "保活已在后台执行..."})
+
     # 跳过关闭保活的 VM
     disabled = {r["user_service_id"] for r in
                 db.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (aid,)).fetchall()}

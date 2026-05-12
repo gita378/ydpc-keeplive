@@ -271,12 +271,27 @@ def ztec_auth(auth: dict, hold: float = 10.0, timeout: float = 10.0) -> int:
         return code
 
 
-# ── 公共接口 ──
+# ── Session 缓存 ──
+_session_cache: dict = {}
+_SESSION_TTL = 3600
+
+
 def soho_login(username: str, password: str, timeout: int = 10) -> CloudPcClient:
-    """登录并返回已认证的客户端"""
+    """登录并返回已认证的客户端。同一账号在 TTL 内复用 session，避免频繁登录触发验证码。"""
+    now = time.time()
+    cached = _session_cache.get(username)
+    if cached:
+        client, ts = cached
+        if now - ts < _SESSION_TTL and client.sohoToken:
+            try:
+                client.list_vms()
+                return client
+            except Exception:
+                pass
     c = CloudPcClient(timeout=timeout)
     c.bootstrap()
     c.login(username, password)
+    _session_cache[username] = (c, now)
     return c
 
 
