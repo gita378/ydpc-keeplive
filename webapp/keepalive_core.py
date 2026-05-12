@@ -944,7 +944,11 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
                 fresh_auth = ci.get("scAuthCode") or sc_auth
 
                 if not scg_ip or not vm_id_str:
-                    raise RuntimeError(f"SCG连接信息不完整: ip={scg_ip}, vmId={vm_id_str}")
+                    LOG.info("[%s] VM未运行(状态=%s)，无SCG地址，跳过", name, status_show)
+                    return KeepaliveResult(
+                        vm_name=name, user_service_id=usid,
+                        success=True, vm_status_before=status_show, booted=booted,
+                    )
 
                 LOG.info("[%s] SCG参数: ip=%s port=%d vmId=%s authCode=%s...",
                          name, scg_ip, scg_port, vm_id_str, fresh_auth[:40] if fresh_auth else "")
