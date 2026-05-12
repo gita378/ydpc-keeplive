@@ -736,26 +736,27 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
     SCG 协议级保活 — 建立 TCP→认证→TLS→SPICE 连接,
     发送 DISPLAY_INIT 让平台认为有客户端在线, 防止 VM 自动关机。
     """
+    tag = f"[SCG vm={vm_id}]"
     sock = None
     tls_sock = None
     try:
         # 1. TCP 连接
-        LOG.info("[SCG] Connecting %s:%d ...", scg_ip, scg_port)
+        LOG.info("%s Connecting %s:%d ...", tag, scg_ip, scg_port)
         sock = socket.create_connection((scg_ip, scg_port), timeout=15)
         sock.settimeout(15)
 
         # 2. 发送认证包
         auth_pkt = _build_scg_auth_packet(sc_auth_code, vm_id)
         sock.sendall(auth_pkt)
-        LOG.info("[SCG] Auth packet sent (%d bytes)", len(auth_pkt))
+        LOG.info("%s Auth packet sent (%d bytes, authCode=%s...)", tag, len(auth_pkt), sc_auth_code[:40])
 
         # 3. 接收认证响应
         resp = _recv_exact(sock, 128)
-        LOG.info("[SCG] Auth response: first_byte=0x%02x, full=%s", resp[0], resp[:16].hex())
+        LOG.info("%s Auth response: first_byte=0x%02x, hex=%s", tag, resp[0], resp[:16].hex())
         if resp[0] != 0x00:
-            LOG.error("[SCG] Auth FAILED: resp[0]=0x%02x (0x01=auth内容错误, 0x02=时间戳/重放)", resp[0])
+            LOG.error("%s Auth FAILED: 0x%02x (0x01=内容错误, 0x02=时间戳/重放)", tag, resp[0])
             return False
-        LOG.info("[SCG] Auth OK")
+        LOG.info("%s Auth OK", tag)
 
         # 4. TLS 升级
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -763,18 +764,18 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
         ctx.verify_mode = ssl.CERT_NONE
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         tls_sock = ctx.wrap_socket(sock, server_hostname=scg_ip)
-        LOG.info("[SCG] TLS %s established", tls_sock.version())
+        LOG.info("%s TLS %s established", tag, tls_sock.version())
 
         # 5. 接收 Welcome ChuanyunHead
         tls_sock.settimeout(10)
         welcome = tls_sock.recv(4096)
         if len(welcome) < 24:
-            LOG.error("[SCG] Welcome too short (%d bytes)", len(welcome))
+            LOG.error("%s Welcome too short (%d bytes)", tag, len(welcome))
             return False
         version = welcome[0]
         msg_type = welcome[1]
         session_id = struct.unpack_from("<Q", welcome, 8)[0]
-        LOG.info("[SCG] Welcome: version=%d type=%d session_id=%d", version, msg_type, session_id)
+        LOG.info("%s Welcome: version=%d type=%d session_id=%d", tag, version, msg_type, session_id)
 
         # 6. 保持连接 hold 秒 (TLS 连接存在即表示客户端在线)
         tls_sock.settimeout(2)
@@ -786,11 +787,11 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
                     break
             except (socket.timeout, BlockingIOError):
                 pass
-        LOG.info("[SCG] Keepalive hold completed (%.0fs)", hold)
+        LOG.info("%s Keepalive hold completed (%.0fs)", tag, hold)
         return True
 
     except Exception as e:
-        LOG.error("[SCG] Error: %s", e)
+        LOG.error("%s Error: %s", tag, e)
         return False
     finally:
         if tls_sock:
