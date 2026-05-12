@@ -681,19 +681,30 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
 
     cag_ip = str(auth.get("cagIp", "")).strip()
     if not cag_ip:
+        sc_auth = auth.get("scAuthCode", "")
+        # SC 云电脑: 关机时先自动开机
+        if auto_boot and _is_vm_off(vm_status) and sc_auth:
+            LOG.info("[%s] SC云电脑关机(status=%s)，尝试自动开机...", name, vm_status)
+            boot_ok, boot_msg = boot_vm(client, vm, timeout=90)
+            if boot_ok:
+                LOG.info("[%s] %s", name, boot_msg)
+                booted = True
+            else:
+                LOG.warning("[%s] SC自动开机失败: %s", name, boot_msg)
+
         LOG.info("[%s] 非ZTE云电脑(spuCode=%s)，使用v1心跳保活", name, vm.get("spuCode", "?"))
         try:
             client.heartbeat_v1(usid)
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
                 success=True, cag_code=200,
-                vm_status_before=status_show,
+                vm_status_before=status_show, booted=booted,
             )
         except Exception as e:
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
                 success=False, error=f"heartbeat_v1失败: {e}",
-                vm_status_before=status_show,
+                vm_status_before=status_show, booted=booted,
             )
 
     if auto_boot and _is_vm_off(vm_status):
