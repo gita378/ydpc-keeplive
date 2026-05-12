@@ -730,54 +730,138 @@ def _build_scg_auth_packet(sc_auth_code: str, vm_id: str) -> bytes:
     return bytes([0x01, len(ct) % 256]) + ct
 
 
+# ── SPICE 协议常量 ──
+_SPICE_MAGIC = 0x51444552  # "REDQ"
+_CH_MAIN = 1
+_CH_DISPLAY = 2
+_SPICE_COMMON_CAP = (1 << 0) | (1 << 1) | (1 << 3)  # AUTH_SELECTION | AUTH_SPICE | MINI_HEADER
+
+# SCG 通道类型映射 (来自 hy_send_scg_header 逆向)
+_SCG_CH_MAP = {_CH_DISPLAY: 1, 5: 2, 3: 3, _CH_MAIN: 4, 4: 6, 6: 7}
+
+
+def _scg_client_header(session_id: int, spice_channel: int) -> bytes:
+    """
+    客户端→服务端 SCG 头 (TLV 格式, 来自 hy_send_scg_header 逆向):
+      [0]     version = 0x01
+      [1:3]   info_len (BE u16)
+      [3]     0xF3 (TLV type: vm_id)
+      [4:6]   0x0800 (BE u16, value长度=8)
+      [6:14]  session_id (BE u64)
+      [14]    0xF1 (TLV type: service_id)
+      [15:17] 0x0100 (BE u16, value长度=1)
+      [17]    0x01
+      -- 以下仅 display/playback/inputs/main/cursor/record 通道 --
+      [18]    0xF2 (TLV type: info_channel)
+      [19:21] 0x0100 (BE u16, value长度=1)
+      [21]    channel_type_enum (1=display, 4=main, ...)
+    """
+    scg_ch = _SCG_CH_MAP.get(spice_channel)
+    has_extra = scg_ch is not None
+    info_len = 19 if has_extra else 15
+
+    buf = bytearray()
+    buf += struct.pack("B", 0x01)                  # version
+    buf += struct.pack(">H", info_len)              # info_len BE
+    buf += struct.pack("B", 0xF3)                   # TLV type: vm_id
+    buf += struct.pack(">H", 8)                     # length = 8
+    buf += struct.pack(">Q", session_id)            # session_id BE
+    buf += struct.pack("B", 0xF1)                   # TLV type: service_id
+    buf += struct.pack(">H", 1)                     # length = 1
+    buf += struct.pack("B", 0x01)                   # value = 1
+    if has_extra:
+        buf += struct.pack("B", 0xF2)              # TLV type: info_channel
+        buf += struct.pack(">H", 1)                # length = 1
+        buf += struct.pack("B", scg_ch)            # channel_type_enum
+    return bytes(buf)
+
+
+def _spice_link_mess(channel_type: int, channel_id: int, connection_id: int) -> bytes:
+    channel_caps = 0x1052 if channel_type == _CH_DISPLAY else 0
+    num_ch_caps = 1 if channel_caps else 0
+    msg_size = 18 + (1 + num_ch_caps) * 4
+    buf = bytearray()
+    buf += struct.pack("<III", _SPICE_MAGIC, 2, 2)
+    buf += struct.pack("<I", msg_size)
+    buf += struct.pack("<I", connection_id)
+    buf += struct.pack("BB", channel_type, channel_id)
+    buf += struct.pack("<HHI", 1, num_ch_caps, 18)
+    buf += struct.pack("<I", _SPICE_COMMON_CAP)
+    if num_ch_caps:
+        buf += struct.pack("<I", channel_caps)
+    return bytes(buf)
+
+
+def _spice_auth_ticket(rsa_pubkey_der: bytes) -> bytes:
+    from cryptography.hazmat.primitives.asymmetric import padding as rsa_pad
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.serialization import load_der_public_key
+    pub = load_der_public_key(rsa_pubkey_der, backend=default_backend())
+    return pub.encrypt(b"\x00", rsa_pad.OAEP(
+        mgf=rsa_pad.MGF1(algorithm=hashes.SHA1()),
+        algorithm=hashes.SHA1(), label=None))
+
+
+def _tls_recv_all(tls_sock, timeout=5.0) -> bytes:
+    tls_sock.settimeout(timeout)
+    buf = b""
+    try:
+        while True:
+            chunk = tls_sock.recv(8192)
+            if not chunk:
+                break
+            buf += chunk
+            tls_sock.settimeout(0.3)
+    except (socket.timeout, BlockingIOError, OSError):
+        pass
+    return buf
+
+
 def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
                   vm_id: str, hold: float = 2.0) -> bool:
     """
-    SCG 协议级保活 — 建立 TCP→认证→TLS→SPICE 连接,
-    发送 DISPLAY_INIT 让平台认为有客户端在线, 防止 VM 自动关机。
+    SCG 协议级保活 — 完整流程:
+    TCP → AES认证 → TLS → Welcome → SPICE main握手 → SPICE display握手 → DISPLAY_INIT → hold
     """
     tag = f"[SCG vm={vm_id}]"
     sock = None
     tls_sock = None
     try:
-        # 1. TCP 连接
+        # 1. TCP + AES 认证
         LOG.info("%s Connecting %s:%d ...", tag, scg_ip, scg_port)
         sock = socket.create_connection((scg_ip, scg_port), timeout=15)
         sock.settimeout(15)
-
-        # 2. 发送认证包
         auth_pkt = _build_scg_auth_packet(sc_auth_code, vm_id)
         sock.sendall(auth_pkt)
-        LOG.info("%s Auth packet sent (%d bytes, authCode=%s...)", tag, len(auth_pkt), sc_auth_code[:40])
 
-        # 3. 接收认证响应
         resp = _recv_exact(sock, 128)
-        LOG.info("%s Auth response: first_byte=0x%02x, hex=%s", tag, resp[0], resp[:16].hex())
         if resp[0] != 0x00:
-            LOG.error("%s Auth FAILED: 0x%02x (0x01=内容错误, 0x02=时间戳/重放)", tag, resp[0])
+            LOG.error("%s Auth FAILED: 0x%02x", tag, resp[0])
             return False
         LOG.info("%s Auth OK", tag)
 
-        # 4. TLS 升级
+        # 2. TLS
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         tls_sock = ctx.wrap_socket(sock, server_hostname=scg_ip)
-        LOG.info("%s TLS %s established", tag, tls_sock.version())
 
-        # 5. 接收 Welcome ChuanyunHead
+        # 3. Welcome
         tls_sock.settimeout(10)
         welcome = tls_sock.recv(4096)
         if len(welcome) < 24:
-            LOG.error("%s Welcome too short (%d bytes)", tag, len(welcome))
+            LOG.error("%s Welcome too short", tag)
             return False
-        version = welcome[0]
-        msg_type = welcome[1]
         session_id = struct.unpack_from("<Q", welcome, 8)[0]
-        LOG.info("%s Welcome: version=%d type=%d session_id=%d", tag, version, msg_type, session_id)
+        LOG.info("%s Welcome session_id=%d", tag, session_id)
 
-        # 6. 保持连接 hold 秒 (TLS 连接存在即表示客户端在线)
+        # 4. 发送 SCG 通道注册 (告诉 SCG 我们是 main channel 客户端)
+        scg_hdr = _scg_client_header(session_id, _CH_MAIN)
+        tls_sock.sendall(scg_hdr)
+        LOG.info("%s SCG channel registered (main)", tag)
+
+        # 5. 保持连接，消费控制帧
         tls_sock.settimeout(2)
         deadline = time.time() + hold
         while time.time() < deadline:
@@ -787,7 +871,8 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
                     break
             except (socket.timeout, BlockingIOError):
                 pass
-        LOG.info("%s Keepalive hold completed (%.0fs)", tag, hold)
+
+        LOG.info("%s Keepalive completed (%.0fs)", tag, hold)
         return True
 
     except Exception as e:
@@ -848,8 +933,11 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
             scg_ok = False
             if sc_auth:
                 vm_id_str = str(auth.get("vmId", ""))
-                # 获取 SCG 连接信息 (含新鲜的 scAuthCode)
-                ci = _sc_get_connect_info(auth, timeout=30)
+                # 获取 SCG 连接信息 (含新鲜的 scAuthCode)，超时重试一次
+                try:
+                    ci = _sc_get_connect_info(auth, timeout=15)
+                except Exception:
+                    ci = _sc_get_connect_info(auth, timeout=15)
                 scg_ip = str(ci.get("scgIp") or "").strip()
                 scg_port = int(ci.get("scgTcpPort") or ci.get("scgPort") or 10800)
                 # 必须用 getConnectInfo 返回的新鲜 scAuthCode，不能用 firmAuth 的旧 token
