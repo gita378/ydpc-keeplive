@@ -197,8 +197,17 @@
                 </div>
                 <div class="modal-body">
                     <div class="mb-3">
+                        <label class="form-label">账号类型</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="account_type" id="typeMain" value="main" checked>
+                            <label class="btn btn-outline-primary" for="typeMain">主账号</label>
+                            <input type="radio" class="btn-check" name="account_type" id="typeSub" value="sub">
+                            <label class="btn btn-outline-info" for="typeSub">子账号</label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label">SOHO 账号</label>
-                        <input type="text" name="username" class="form-control" placeholder="如 zhaoboy" required>
+                        <input type="text" name="username" class="form-control" placeholder="主账号手机号 或 子账号名" required>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">密码</label>

@@ -63,6 +63,7 @@ def add_account():
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "").strip()
     remark = request.form.get("remark", "").strip()
+    account_type = request.form.get("account_type", "main")
     if not username or not password:
         flash("账号和密码不能为空", "danger")
         return redirect(url_for("main.index"))
@@ -81,8 +82,8 @@ def add_account():
         flash(f"登录失败: {e}", "danger")
         return redirect(url_for("main.index"))
 
-    # 写入数据库
-    account_type = getattr(client, 'account_type', 'main')
+    # 写入数据库（用实际检测到的类型，比用户选择更准确）
+    account_type = getattr(client, 'account_type', account_type)
     cur = db.execute(
         "INSERT INTO cloud_account (username, password, remark, account_type, last_login_at) VALUES (?, ?, ?, ?, ?)",
         (username, password, remark, account_type, _now_cst()),
