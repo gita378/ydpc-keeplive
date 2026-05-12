@@ -364,14 +364,10 @@ def _sc_rsa_encrypt_vmid(vm_id: str) -> str:
     return "{rsa}" + base64.urlsafe_b64encode(encrypted).decode().rstrip("=")
 
 
-def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int = 90) -> tuple:
-    """SC 家庭云电脑开机: OAuth → getConnectInfo → getVmReadyStatus"""
+def _sc_get_session(auth_data: dict):
+    """创建 SC API 请求 session"""
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-    vm_id = str(auth_data["vmId"])
-    biz_code = auth_data.get("bizCode", "10002")
-    sc_auth = auth_data["scAuthCode"]
 
     sess = requests.Session()
     sess.trust_env = False
@@ -386,55 +382,68 @@ def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int 
             kw["ssl_context"] = ctx
             super().init_poolmanager(*a, **kw)
     sess.mount("https://", _A())
+    return sess
 
-    def sc_headers(token=None, ct="application/json"):
-        h = {
-            "gzs-client-id": _SC_CLIENT_ID,
-            "gzs-timestamp": str(int(time.time() * 1000)),
-            "sc-terminal-sn": "keepalive-server",
-            "sc-unit-type": "Linux",
-            "sc-network-type": "2",
-            "User-Agent": "cdpsdk-server-1.0",
-            "Content-type": ct,
-        }
-        if token:
-            h["Authorization"] = f"Bearer {token}"
-        return h
 
-    # 1. OAuth token (缓存复用)
+def _sc_headers(token=None, ct="application/json"):
+    h = {
+        "gzs-client-id": _SC_CLIENT_ID,
+        "gzs-timestamp": str(int(time.time() * 1000)),
+        "sc-terminal-sn": "keepalive-server",
+        "sc-unit-type": "Linux",
+        "sc-network-type": "2",
+        "User-Agent": "cdpsdk-server-1.0",
+        "Content-type": ct,
+    }
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+def _sc_get_token(sess, auth_data: dict) -> str:
+    """获取 SC OAuth access_token (带缓存)"""
+    vm_id = str(auth_data["vmId"])
+    biz_code = auth_data.get("bizCode", "10002")
+    sc_auth = auth_data["scAuthCode"]
     cache_key = f"sc_{vm_id}"
     now = time.time()
     cached = _sc_token_cache.get(cache_key)
-    access_token = None
     if cached and now - cached[1] < _SC_TOKEN_TTL:
-        access_token = cached[0]
-    if not access_token:
-        r = sess.post(f"{_SC_BASE_URL}/gzs/auth/oauth/token", data={
-            "grant_type": "ext", "client_id": _SC_CLIENT_ID,
-            "bizCode": biz_code, "token": sc_auth, "source": "biz",
-        }, headers=sc_headers(ct="application/x-www-form-urlencoded"), timeout=15, verify=False)
-        td = r.json()
-        token_data = td.get("data") or td
-        if not token_data.get("access_token"):
-            return False, f"SC OAuth 失败: {td.get('message', td.get('code'))}"
-        access_token = token_data["access_token"]
-        _sc_token_cache[cache_key] = (access_token, now)
+        return cached[0]
+    r = sess.post(f"{_SC_BASE_URL}/gzs/auth/oauth/token", data={
+        "grant_type": "ext", "client_id": _SC_CLIENT_ID,
+        "bizCode": biz_code, "token": sc_auth, "source": "biz",
+    }, headers=_sc_headers(ct="application/x-www-form-urlencoded"), timeout=15, verify=False)
+    td = r.json()
+    token_data = td.get("data") or td
+    if not token_data.get("access_token"):
+        raise RuntimeError(f"SC OAuth 失败: {td.get('message', td.get('code'))}")
+    access_token = token_data["access_token"]
+    _sc_token_cache[cache_key] = (access_token, now)
+    return access_token
 
-    # 2. getConnectInfo (触发开机/保活)
+
+def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int = 90) -> tuple:
+    """SC 家庭云电脑开机: OAuth → getConnectInfo → getVmReadyStatus"""
+    vm_id = str(auth_data["vmId"])
+    sess = _sc_get_session(auth_data)
+    access_token = _sc_get_token(sess, auth_data)
     encrypted_vmid = _sc_rsa_encrypt_vmid(vm_id)
+
+    # getConnectInfo (触发开机/保活)
     r = sess.post(f"{_SC_BASE_URL}/sc/open-portal/openapi/terminal/v1/getConnectInfo",
                   data=json.dumps({"vmId": encrypted_vmid}, separators=(",", ":")),
-                  headers=sc_headers(token=access_token), timeout=timeout, verify=False)
+                  headers=_sc_headers(token=access_token), timeout=timeout, verify=False)
     ci = r.json()
     if ci.get("code") != "00000":
         return False, f"getConnectInfo: {ci.get('message', ci.get('code'))}"
 
-    # 3. getVmReadyStatus
+    # getVmReadyStatus
     trace_id = ci.get("data", {}).get("traceId", "")
     if trace_id:
         r = sess.post(f"{_SC_BASE_URL}/sc/open-portal/openapi/terminal/v1/getVmReadyStatus",
                       data=json.dumps({"vmId": encrypted_vmid, "traceId": trace_id}, separators=(",", ":")),
-                      headers=sc_headers(token=access_token), timeout=30, verify=False)
+                      headers=_sc_headers(token=access_token), timeout=30, verify=False)
         rs = r.json()
         ready = rs.get("data", {}).get("readyStatus")
         if ready == 1:
@@ -442,6 +451,22 @@ def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int 
         return True, f"SC开机已触发(ready={ready})"
 
     return True, "SC开机已触发"
+
+
+def _sc_get_connect_info(auth_data: dict, timeout: int = 30) -> dict:
+    """获取 SC 连接信息(含 SCG IP/Port)"""
+    vm_id = str(auth_data["vmId"])
+    sess = _sc_get_session(auth_data)
+    access_token = _sc_get_token(sess, auth_data)
+    encrypted_vmid = _sc_rsa_encrypt_vmid(vm_id)
+
+    r = sess.post(f"{_SC_BASE_URL}/sc/open-portal/openapi/terminal/v1/getConnectInfo",
+                  data=json.dumps({"vmId": encrypted_vmid}, separators=(",", ":")),
+                  headers=_sc_headers(token=access_token), timeout=timeout, verify=False)
+    ci = r.json()
+    if ci.get("code") != "00000":
+        return {}
+    return ci.get("data", {})
 
 
 # ── CSAP 开机实现 (自包含) ──
@@ -663,6 +688,115 @@ def _is_vm_off(vm_status) -> bool:
     return vm_status in (16, "16", 23, "23")
 
 
+# ── SCG 协议级保活 (SC 家庭云电脑) ──
+
+_SCG_AES_KEY = bytes([0xFE] * 16)
+_SCG_NONCE_LO = 0xFEFEFEFEFEFEFEFE
+_SCG_NONCE_HI = bytes([0xFE] * 8)
+
+
+def _aes_ecb_block(key: bytes, block: bytes) -> bytes:
+    """单块 AES-ECB"""
+    c = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend())
+    e = c.encryptor()
+    return e.update(block) + e.finalize()
+
+
+def _scg_aes_ctr_encrypt(plaintext: bytes) -> bytes:
+    """JWAE 格式 AES-128-CTR: LE64 计数器 + 固定高位"""
+    result = bytearray()
+    for i in range((len(plaintext) + 15) // 16):
+        ctr = struct.pack('<Q', (_SCG_NONCE_LO + i) & 0xFFFFFFFFFFFFFFFF) + _SCG_NONCE_HI
+        ks = _aes_ecb_block(_SCG_AES_KEY, ctr)
+        s, e = i * 16, min(i * 16 + 16, len(plaintext))
+        for j in range(e - s):
+            result.append(plaintext[s + j] ^ ks[j])
+    return bytes(result)
+
+
+def _build_scg_auth_packet(sc_auth_code: str, vm_id: str) -> bytes:
+    """构建 SCG 认证包: [0x01][len%256][AES-CTR ciphertext]"""
+    auth_value = sc_auth_code.encode() + b"|" + vm_id.encode()
+    plaintext = bytearray()
+    plaintext += struct.pack(">H", 0x0002)              # version
+    plaintext += struct.pack(">q", int(time.time()))     # timestamp 8B BE
+    plaintext += struct.pack("B", 0x03)                  # TLV type
+    plaintext += struct.pack(">H", len(auth_value))      # TLV length
+    plaintext += auth_value
+    ct = _scg_aes_ctr_encrypt(bytes(plaintext))
+    return bytes([0x01, len(ct) % 256]) + ct
+
+
+def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
+                  vm_id: str, hold: float = 2.0) -> bool:
+    """
+    SCG 协议级保活 — 建立 TCP→认证→TLS→SPICE 连接,
+    发送 DISPLAY_INIT 让平台认为有客户端在线, 防止 VM 自动关机。
+    """
+    sock = None
+    tls_sock = None
+    try:
+        # 1. TCP 连接
+        LOG.info("[SCG] Connecting %s:%d ...", scg_ip, scg_port)
+        sock = socket.create_connection((scg_ip, scg_port), timeout=15)
+        sock.settimeout(15)
+
+        # 2. 发送认证包
+        auth_pkt = _build_scg_auth_packet(sc_auth_code, vm_id)
+        sock.sendall(auth_pkt)
+        LOG.info("[SCG] Auth packet sent (%d bytes)", len(auth_pkt))
+
+        # 3. 接收 128 字节认证响应
+        resp = _recv_exact(sock, 128)
+        if resp[0] != 0x00:
+            LOG.error("[SCG] Auth FAILED: resp[0]=0x%02x", resp[0])
+            return False
+        LOG.info("[SCG] Auth OK")
+
+        # 4. TLS 升级
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_sock = ctx.wrap_socket(sock, server_hostname=scg_ip)
+        LOG.info("[SCG] TLS %s established", tls_sock.version())
+
+        # 5. 接收 Welcome ChuanyunHead
+        tls_sock.settimeout(10)
+        welcome = tls_sock.recv(4096)
+        if len(welcome) < 24:
+            LOG.error("[SCG] Welcome too short (%d bytes)", len(welcome))
+            return False
+        version = welcome[0]
+        msg_type = welcome[1]
+        session_id = struct.unpack_from("<Q", welcome, 8)[0]
+        LOG.info("[SCG] Welcome: version=%d type=%d session_id=%d", version, msg_type, session_id)
+
+        # 6. 保持连接 hold 秒 (TLS 连接存在即表示客户端在线)
+        tls_sock.settimeout(2)
+        deadline = time.time() + hold
+        while time.time() < deadline:
+            try:
+                data = tls_sock.recv(4096)
+                if not data:
+                    break
+            except (socket.timeout, BlockingIOError):
+                pass
+        LOG.info("[SCG] Keepalive hold completed (%.0fs)", hold)
+        return True
+
+    except Exception as e:
+        LOG.error("[SCG] Error: %s", e)
+        return False
+    finally:
+        if tls_sock:
+            try: tls_sock.close()
+            except: pass
+        elif sock:
+            try: sock.close()
+            except: pass
+
+
 def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout: int = 10,
                         auto_boot: bool = True) -> KeepaliveResult:
     """对单台云电脑做保活。如果 VM 关机且 auto_boot=True，先尝试开机"""
@@ -704,25 +838,33 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
             else:
                 LOG.warning("[%s] SC自动开机失败: %s", name, boot_msg)
 
-        LOG.info("[%s] SC云电脑(spuCode=%s)，getConnectInfo+heartbeat保活", name, vm.get("spuCode", "?"))
+        LOG.info("[%s] SC云电脑(spuCode=%s)，SCG协议级保活", name, vm.get("spuCode", "?"))
         try:
-            # SC 云电脑: getConnectInfo 才能真正保活(heartbeat 只保 SOHO 在线)
+            scg_ok = False
             if sc_auth:
-                try:
-                    _sc_boot_vm(client, auth, usid, timeout=90)
-                    LOG.info("[%s] SC getConnectInfo 保活成功", name)
-                except Exception as e:
-                    LOG.warning("[%s] SC getConnectInfo 保活失败: %s", name, e)
-            client.heartbeat_v1(usid)
+                vm_id_str = str(auth.get("vmId", ""))
+                # 获取 SCG 连接信息
+                ci = _sc_get_connect_info(auth, timeout=30)
+                scg_ip = str(ci.get("connectIp") or ci.get("scgIp") or "").strip()
+                scg_port = int(ci.get("connectPort") or ci.get("scgPort") or 10800)
+
+                if not scg_ip or not vm_id_str:
+                    raise RuntimeError(f"SCG连接信息不完整: ip={scg_ip}, vmId={vm_id_str}")
+
+                scg_ok = scg_keepalive(scg_ip, scg_port, sc_auth, vm_id_str, hold=2)
+                if not scg_ok:
+                    raise RuntimeError("SCG认证失败(resp!=0x00)")
+
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
-                success=True, cag_code=200,
+                success=scg_ok, cag_code=200 if scg_ok else 0,
                 vm_status_before=status_show, booted=booted,
             )
         except Exception as e:
+            LOG.error("[%s] SCG保活失败: %s", name, e)
             return KeepaliveResult(
                 vm_name=name, user_service_id=usid,
-                success=False, error=f"SC保活失败: {e}",
+                success=False, error=f"SCG保活失败: {e}",
                 vm_status_before=status_show, booted=booted,
             )
 
