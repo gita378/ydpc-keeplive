@@ -95,14 +95,14 @@
         <table class="table table-sm mb-0">
             <thead class="table-light">
                 <tr>
-                    <th>名称</th>
+                    <th class="sortable" data-col="0" onclick="sortTable(this)">名称 ⇅</th>
                     <th>配置详情</th>
-                    <th>状态</th>
-                    <th>剩余时长</th>
+                    <th class="sortable" data-col="2" onclick="sortTable(this)">状态 ⇅</th>
+                    <th class="sortable" data-col="3" data-type="num" onclick="sortTable(this)">剩余时长 ⇅</th>
                     <th>操作</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="vmTableBody">
             {% for vm in vms %}
                 <tr>
                     <td>
@@ -255,6 +255,30 @@ function bootAll(btn) {
         btn.disabled=false;btn.textContent='❌ 错误';btn.className='btn btn-sm btn-danger';
         setTimeout(()=>{btn.textContent=orig;btn.className='btn btn-sm btn-success';},3000);
     });
+}
+
+function sortTable(th) {
+    var col = parseInt(th.dataset.col);
+    var isNum = th.dataset.type === 'num';
+    var tbody = document.getElementById('vmTableBody');
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    var asc = th.dataset.order !== 'asc';
+    th.dataset.order = asc ? 'asc' : 'desc';
+    // 重置其他列的排序标记
+    th.closest('tr').querySelectorAll('.sortable').forEach(function(t){ if(t!==th) t.dataset.order=''; });
+    rows.sort(function(a, b) {
+        var va = a.cells[col].textContent.trim();
+        var vb = b.cells[col].textContent.trim();
+        if (isNum) {
+            var na = parseFloat(va) || -1;
+            var nb = parseFloat(vb) || -1;
+            if (va.includes('无限')) na = 999999;
+            if (vb.includes('无限')) nb = 999999;
+            return asc ? na - nb : nb - na;
+        }
+        return asc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
+    });
+    rows.forEach(function(r){ tbody.appendChild(r); });
 }
 </script>
 {% endblock %}
