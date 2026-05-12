@@ -464,9 +464,12 @@ def _sc_get_connect_info(auth_data: dict, timeout: int = 30) -> dict:
                   data=json.dumps({"vmId": encrypted_vmid}, separators=(",", ":")),
                   headers=_sc_headers(token=access_token), timeout=timeout, verify=False)
     ci = r.json()
+    LOG.info("[SC] getConnectInfo response: %s", json.dumps(ci, ensure_ascii=False, default=str)[:1000])
     if ci.get("code") != "00000":
         return {}
-    return ci.get("data", {})
+    data = ci.get("data", {})
+    LOG.info("[SC] connectInfo data keys: %s", list(data.keys()))
+    return data
 
 
 # ── CSAP 开机实现 (自包含) ──
@@ -746,10 +749,11 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
         sock.sendall(auth_pkt)
         LOG.info("[SCG] Auth packet sent (%d bytes)", len(auth_pkt))
 
-        # 3. 接收 128 字节认证响应
+        # 3. 接收认证响应
         resp = _recv_exact(sock, 128)
+        LOG.info("[SCG] Auth response: first_byte=0x%02x, full=%s", resp[0], resp[:16].hex())
         if resp[0] != 0x00:
-            LOG.error("[SCG] Auth FAILED: resp[0]=0x%02x", resp[0])
+            LOG.error("[SCG] Auth FAILED: resp[0]=0x%02x (0x01=auth内容错误, 0x02=时间戳/重放)", resp[0])
             return False
         LOG.info("[SCG] Auth OK")
 
@@ -851,6 +855,8 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
                 if not scg_ip or not vm_id_str:
                     raise RuntimeError(f"SCG连接信息不完整: ip={scg_ip}, vmId={vm_id_str}")
 
+                LOG.info("[%s] SCG参数: ip=%s port=%d vmId=%s authCode=%s...",
+                         name, scg_ip, scg_port, vm_id_str, sc_auth[:30] if sc_auth else "")
                 scg_ok = scg_keepalive(scg_ip, scg_port, sc_auth, vm_id_str, hold=2)
                 if not scg_ok:
                     raise RuntimeError("SCG认证失败(resp!=0x00)")
