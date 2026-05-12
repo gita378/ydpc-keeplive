@@ -647,7 +647,11 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
     booted = False
 
     if not status_show and vm_status in (0, "0"):
-        status_show = "未开机"
+        LOG.info("[%s] vmStatus=0 从未开机，跳过", name)
+        return KeepaliveResult(
+            vm_name=name, user_service_id=usid,
+            success=True, vm_status_before="未开机",
+        )
 
     LOG.info("[%s] 保活前状态: %s (vmStatus=%s)", name, status_show, vm_status)
 
