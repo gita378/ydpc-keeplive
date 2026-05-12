@@ -305,6 +305,8 @@ def boot_vm(client: CloudPcClient, vm: dict, timeout: int = 30) -> tuple:
     usid = int(vm["userServiceId"])
     name = vm.get("vmName", "?")
     vm_status = vm.get("vmStatus")
+    if vm_status in (0, "0") and not vm.get("vmStatusShow"):
+        return False, f"{name}: 从未开机，需先用官方客户端连接一次"
     if not _is_vm_off(vm_status):
         return True, f"{name}: 已在运行中(status={vm.get('vmStatusShow', vm_status)})"
 
