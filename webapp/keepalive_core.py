@@ -848,17 +848,19 @@ def keepalive_single_vm(client: CloudPcClient, vm: dict, hold: int = 10, timeout
             scg_ok = False
             if sc_auth:
                 vm_id_str = str(auth.get("vmId", ""))
-                # 获取 SCG 连接信息
+                # 获取 SCG 连接信息 (含新鲜的 scAuthCode)
                 ci = _sc_get_connect_info(auth, timeout=30)
-                scg_ip = str(ci.get("connectIp") or ci.get("scgIp") or "").strip()
-                scg_port = int(ci.get("connectPort") or ci.get("scgPort") or 10800)
+                scg_ip = str(ci.get("scgIp") or "").strip()
+                scg_port = int(ci.get("scgTcpPort") or ci.get("scgPort") or 10800)
+                # 必须用 getConnectInfo 返回的新鲜 scAuthCode，不能用 firmAuth 的旧 token
+                fresh_auth = ci.get("scAuthCode") or sc_auth
 
                 if not scg_ip or not vm_id_str:
                     raise RuntimeError(f"SCG连接信息不完整: ip={scg_ip}, vmId={vm_id_str}")
 
                 LOG.info("[%s] SCG参数: ip=%s port=%d vmId=%s authCode=%s...",
-                         name, scg_ip, scg_port, vm_id_str, sc_auth[:30] if sc_auth else "")
-                scg_ok = scg_keepalive(scg_ip, scg_port, sc_auth, vm_id_str, hold=2)
+                         name, scg_ip, scg_port, vm_id_str, fresh_auth[:40] if fresh_auth else "")
+                scg_ok = scg_keepalive(scg_ip, scg_port, fresh_auth, vm_id_str, hold=2)
                 if not scg_ok:
                     raise RuntimeError("SCG认证失败(resp!=0x00)")
 
