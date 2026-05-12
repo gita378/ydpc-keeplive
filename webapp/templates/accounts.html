@@ -68,6 +68,9 @@
                     <td><input type="checkbox" class="row-check" value="{{ a.id }}" onchange="updateBatch()"></td>
                     <td>
                         <strong>{{ a.username }}</strong>
+                        {% if a.account_type == 'sub' %}
+                        <span class="badge bg-info" style="font-size:10px">子</span>
+                        {% endif %}
                     </td>
                     <td class="remark-cell">
                         <span class="remark-text" ondblclick="editRemark(this, {{ a.id }})" title="双击编辑">{{ a.remark or '' }}</span>

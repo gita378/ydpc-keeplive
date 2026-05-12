@@ -79,6 +79,7 @@ def _migrate(db):
         ("cloud_account", "expire_at", "TEXT"),
         ("cloud_vm", "keepalive_enabled", "INTEGER DEFAULT 1"),
         ("cloud_account", "remark", "TEXT DEFAULT ''"),
+        ("cloud_account", "account_type", "TEXT DEFAULT 'main'"),
         ("keepalive_log", "vm_status_before", "TEXT"),
         ("keepalive_log", "booted", "INTEGER DEFAULT 0"),
     ]

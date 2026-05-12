@@ -82,9 +82,10 @@ def add_account():
         return redirect(url_for("main.index"))
 
     # 写入数据库
+    account_type = getattr(client, 'account_type', 'main')
     cur = db.execute(
-        "INSERT INTO cloud_account (username, password, remark, last_login_at) VALUES (?, ?, ?, ?)",
-        (username, password, remark, _now_cst()),
+        "INSERT INTO cloud_account (username, password, remark, account_type, last_login_at) VALUES (?, ?, ?, ?, ?)",
+        (username, password, remark, account_type, _now_cst()),
     )
     account_id = cur.lastrowid
 

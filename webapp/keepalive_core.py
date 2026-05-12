@@ -142,6 +142,7 @@ class CloudPcClient:
         self.userId = ""
         self.deviceId = _gen_device_id()
         self.timeout = timeout
+        self.account_type = "main"
         plat = platform.system().lower()
         ps = {"darwin": "mac", "windows": "windows", "linux": "linux"}.get(plat, plat)
         rel = platform.release()
@@ -213,12 +214,23 @@ class CloudPcClient:
             raise RuntimeError(f"login key failed: {r}")
         lpem = b"-----BEGIN PUBLIC KEY-----\n" + r["data"].encode() + b"\n-----END PUBLIC KEY-----\n"
         lpub = load_pem_public_key(lpem, backend=default_backend())
+        enc_pwd = _rsa_password(lpub, password)
+        # 先试主账号登录
         r2 = self._request("/login/namePwdLogin/v1", {
-            "username": username, "password": _rsa_password(lpub, password),
+            "username": username, "password": enc_pwd,
             "verificationCode": "", "randomCode": "",
         })
-        if r2.get("code") != 2000:
-            raise RuntimeError(f"login failed: {r2.get('msg', r2)}")
+        if r2.get("code") == 2000:
+            self.account_type = "main"
+        else:
+            # 主账号失败则试子账号登录
+            r2 = self._request("/login/home/namePwdLogin/v1", {
+                "subAccount": username, "password": enc_pwd,
+                "verificationCode": "", "randomCode": "",
+            })
+            if r2.get("code") != 2000:
+                raise RuntimeError(f"login failed: {r2.get('msg', r2)}")
+            self.account_type = "sub"
         self.userId = str(r2["data"]["userId"])
         self.sohoToken = r2["data"]["sohoToken"]
 
