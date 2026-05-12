@@ -15,6 +15,7 @@ import socket
 import ssl
 import os
 import struct
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -118,6 +119,7 @@ def _derive_aes(ck: int, sk: int):
         ms & 0xFF, ms >> 24 & 0xFF, ms >> 16 & 0xFF, ms >> 8 & 0xFF,
         mc >> 24 & 0xFF, mc >> 8 & 0xFF, mc & 0xFF, mc >> 16 & 0xFF,
     )).encode()[:32]
+    # "02x" 不是 "%02x" — 这是协议兼容需要的，服务端用的就是这个格式，不能改
     iv = ("02x%02X%02X%02x%02X%02x%02x%02X" % (
         mc >> 16 & 0xFF, mc & 0xFF, mc >> 8 & 0xFF, mc >> 24 & 0xFF,
         ms >> 8 & 0xFF, ms >> 16 & 0xFF, ms >> 24 & 0xFF,
@@ -285,26 +287,28 @@ def ztec_auth(auth: dict, hold: float = 10.0, timeout: float = 10.0) -> int:
 
 # ── Session 缓存 ──
 _session_cache: dict = {}
+_session_lock = threading.Lock()
 _SESSION_TTL = 3600
 
 
 def soho_login(username: str, password: str, timeout: int = 10) -> CloudPcClient:
     """登录并返回已认证的客户端。同一账号在 TTL 内复用 session，避免频繁登录触发验证码。"""
-    now = time.time()
-    cached = _session_cache.get(username)
-    if cached:
-        client, ts = cached
-        if now - ts < _SESSION_TTL and client.sohoToken:
-            try:
-                client.list_vms()
-                return client
-            except Exception:
-                pass
-    c = CloudPcClient(timeout=timeout)
-    c.bootstrap()
-    c.login(username, password)
-    _session_cache[username] = (c, now)
-    return c
+    with _session_lock:
+        now = time.time()
+        cached = _session_cache.get(username)
+        if cached:
+            client, ts = cached
+            if now - ts < _SESSION_TTL and client.sohoToken:
+                try:
+                    client.list_vms()
+                    return client
+                except Exception:
+                    pass
+        c = CloudPcClient(timeout=timeout)
+        c.bootstrap()
+        c.login(username, password)
+        _session_cache[username] = (c, now)
+        return c
 
 
 def fetch_vm_list(client: CloudPcClient) -> list:
@@ -352,7 +356,8 @@ _SC_RSA_PK_SDK2 = (
 
 
 _sc_token_cache: dict = {}
-_SC_TOKEN_TTL = 3600
+_sc_token_lock = threading.Lock()
+_SC_TOKEN_TTL = 240  # SC OAuth token ~5 min 过期，缓存 4 min
 
 
 def _sc_rsa_encrypt_vmid(vm_id: str) -> str:
@@ -364,11 +369,18 @@ def _sc_rsa_encrypt_vmid(vm_id: str) -> str:
     return "{rsa}" + base64.urlsafe_b64encode(encrypted).decode().rstrip("=")
 
 
-def _sc_get_session(auth_data: dict):
-    """创建 SC API 请求 session"""
+_sc_session: Optional[requests.Session] = None
+_sc_session_lock = threading.Lock()
+
+
+def _sc_get_session(auth_data: dict = None):
+    """复用单个 SC API session，避免每次新建泄漏 socket"""
+    global _sc_session
+    with _sc_session_lock:
+        if _sc_session is not None:
+            return _sc_session
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
     sess = requests.Session()
     sess.trust_env = False
     from requests.adapters import HTTPAdapter
@@ -382,6 +394,8 @@ def _sc_get_session(auth_data: dict):
             kw["ssl_context"] = ctx
             super().init_poolmanager(*a, **kw)
     sess.mount("https://", _A())
+    with _sc_session_lock:
+        _sc_session = sess
     return sess
 
 
@@ -401,15 +415,16 @@ def _sc_headers(token=None, ct="application/json"):
 
 
 def _sc_get_token(sess, auth_data: dict) -> str:
-    """获取 SC OAuth access_token (带缓存)"""
+    """获取 SC OAuth access_token (线程安全，带缓存)"""
     vm_id = str(auth_data["vmId"])
     biz_code = auth_data.get("bizCode", "10002")
     sc_auth = auth_data["scAuthCode"]
     cache_key = f"sc_{vm_id}"
-    now = time.time()
-    cached = _sc_token_cache.get(cache_key)
-    if cached and now - cached[1] < _SC_TOKEN_TTL:
-        return cached[0]
+    with _sc_token_lock:
+        now = time.time()
+        cached = _sc_token_cache.get(cache_key)
+        if cached and now - cached[1] < _SC_TOKEN_TTL:
+            return cached[0]
     r = sess.post(f"{_SC_BASE_URL}/gzs/auth/oauth/token", data={
         "grant_type": "ext", "client_id": _SC_CLIENT_ID,
         "bizCode": biz_code, "token": sc_auth, "source": "biz",
@@ -419,8 +434,15 @@ def _sc_get_token(sess, auth_data: dict) -> str:
     if not token_data.get("access_token"):
         raise RuntimeError(f"SC OAuth 失败: {td.get('message', td.get('code'))}")
     access_token = token_data["access_token"]
-    _sc_token_cache[cache_key] = (access_token, now)
+    with _sc_token_lock:
+        _sc_token_cache[cache_key] = (access_token, time.time())
     return access_token
+
+
+def _sc_invalidate_token(vm_id: str):
+    """清除 SC token 缓存，下次调用会重新获取"""
+    with _sc_token_lock:
+        _sc_token_cache.pop(f"sc_{vm_id}", None)
 
 
 def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int = 90) -> tuple:
@@ -454,10 +476,14 @@ def _sc_boot_vm(client: CloudPcClient, auth_data: dict, usid: int, timeout: int 
 
 
 def _sc_get_connect_info(auth_data: dict, timeout: int = 30) -> dict:
-    """获取 SC 连接信息(含 SCG IP/Port)"""
+    """获取 SC 连接信息(含 SCG IP/Port)。token 过期时自动清缓存重试。"""
     vm_id = str(auth_data["vmId"])
     sess = _sc_get_session(auth_data)
-    access_token = _sc_get_token(sess, auth_data)
+    try:
+        access_token = _sc_get_token(sess, auth_data)
+    except Exception:
+        _sc_invalidate_token(vm_id)
+        access_token = _sc_get_token(sess, auth_data)
     encrypted_vmid = _sc_rsa_encrypt_vmid(vm_id)
 
     r = sess.post(f"{_SC_BASE_URL}/sc/open-portal/openapi/terminal/v1/getConnectInfo",
@@ -966,7 +992,6 @@ def _tls_recv_all(tls_sock, timeout=5.0) -> bytes:
 
 
 # 后台 SCG 长连接管理
-import threading
 _scg_connections: dict = {}   # vm_id → {"thread": Thread, "alive": bool, "since": float}
 _scg_lock = threading.Lock()
 
@@ -1146,10 +1171,10 @@ def _scg_hold_loop(scg_ip: str, scg_port: int, sc_auth_code: str,
     finally:
         if tls_sock:
             try: tls_sock.close()
-            except: pass
+            except Exception: pass
         elif sock:
             try: sock.close()
-            except: pass
+            except Exception: pass
         with _scg_lock:
             _scg_connections.pop(vm_id, None)
 
@@ -1158,39 +1183,19 @@ def scg_keepalive(scg_ip: str, scg_port: int, sc_auth_code: str,
                   vm_id: str, hold: float = 2.0) -> bool:
     """
     SCG 协议级保活 — 在后台线程保持长连接。
-    如果已有活跃连接，跳过；否则启动新的后台连接，保持到下次保活周期。
-    hold 参数仅用于同步验证认证是否成功。
+    如果已有活跃连接，跳过；否则启动新的后台连接。
+    不再做冗余的双认证，直接在后台线程中认证。
     """
     tag = f"[SCG vm={vm_id}]"
 
-    # 已有活跃连接，跳过
     with _scg_lock:
         existing = _scg_connections.get(vm_id)
         if existing and existing["thread"].is_alive():
             LOG.info("%s 已有活跃连接(since %.0fs ago)，跳过", tag, time.time() - existing["since"])
             return True
+        # 立即占位，防止并发启动重复线程
+        _scg_connections[vm_id] = {"thread": None, "alive": False, "since": time.time()}
 
-    # 先短连接验证认证能否成功
-    sock = None
-    tls_sock = None
-    try:
-        sock = socket.create_connection((scg_ip, scg_port), timeout=15)
-        sock.settimeout(15)
-        sock.sendall(_build_scg_auth_packet(sc_auth_code, vm_id))
-        resp = _recv_exact(sock, 128)
-        if resp[0] != 0x00:
-            LOG.error("%s Auth FAILED: 0x%02x", tag, resp[0])
-            return False
-        LOG.info("%s Auth OK", tag)
-    except Exception as e:
-        LOG.error("%s Error: %s", tag, e)
-        return False
-    finally:
-        if sock:
-            try: sock.close()
-            except: pass
-
-    # 认证成功，启动后台长连接 (保持 10 分钟)
     t = threading.Thread(target=_scg_hold_loop, daemon=True,
                          args=(scg_ip, scg_port, sc_auth_code, vm_id, 240))
     t.start()
@@ -1338,9 +1343,14 @@ def keepalive_account(username: str, password: str, hold: int = 10, timeout: int
         except (TypeError, ValueError):
             worker_limit = 8
 
+        def _keepalive_with_own_client(vm):
+            # 每线程复用同一个 cached client (soho_login 内部有锁保护)
+            c = soho_login(username, password, timeout=timeout)
+            return keepalive_single_vm(c, vm, hold, timeout)
+
         with ThreadPoolExecutor(max_workers=min(worker_limit, len(todo) or 1)) as pool:
             futures = {
-                pool.submit(keepalive_single_vm, client, vm, hold, timeout): vm
+                pool.submit(_keepalive_with_own_client, vm): vm
                 for vm in todo
             }
             for f in as_completed(futures):
