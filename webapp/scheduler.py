@@ -1,6 +1,7 @@
 """APScheduler 后台保活调度"""
 import sqlite3
 import logging
+import random  # [改造] 新增:用于 ±1 分钟随机浮动
 from datetime import datetime, timezone, timedelta
 
 _CST = timezone(timedelta(hours=8))
@@ -10,7 +11,7 @@ def _now_cst() -> str:
     """返回北京时间 ISO 格式字符串"""
     return datetime.now(_CST).strftime("%Y-%m-%d %H:%M:%S")
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.date import DateTrigger  # [改造] interval 固定周期 → date 单次触发自循环
 from keepalive_core import keepalive_account
 
 LOG = logging.getLogger("scheduler")
@@ -18,8 +19,20 @@ scheduler = BackgroundScheduler(daemon=True, job_defaults={"coalesce": True, "ma
 
 
 def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
-                   hold: int = 10, max_workers: int = 8):
+                   hold: int = 10, max_workers: int = 8, base_interval: float = None):
     """后台任务：执行保活并写日志 + 刷新 VM 状态到数据库"""
+    # [改造] 本次保活运行完毕后,在函数尾部调度下一次(date 单次自循环)
+    def schedule_next():
+        if base_interval is None:
+            return
+        # [改造] 硬性约束①:浮动基于「本次实际完成时刻」,而非原计划时间推算
+        # [改造] 基准间隔(分钟) + [-1, +1] 均匀随机偏移;下限强制 3 分钟,防请求过频
+        next_minutes = max(3, base_interval + random.uniform(-1, 1))
+        next_run = datetime.now(_CST) + timedelta(minutes=next_minutes)
+        # [改造] 移除本次已完成的旧 date 任务 → 新建下一次 date 单次任务(传递账号与基准间隔,闭环)
+        remove_job(account_id)
+        _add_date_job(account_id, username, password, db_path, hold, base_interval, next_run)
+
     LOG.info("[%s] 执行保活", username)
     # 检查是否到期
     conn_check = sqlite3.connect(db_path)
@@ -31,6 +44,7 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
             expire = _dt.fromisoformat(row[0])
             if _dt.now(_CST).replace(tzinfo=None) > expire:
                 LOG.info("[%s] 账号已到期(%s)，跳过保活", username, row[0][:10])
+                schedule_next()
                 return
         except Exception:
             pass
@@ -57,6 +71,7 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
                      (_now_cst(), account_id))
         conn.commit()
         conn.close()
+        schedule_next()
         return
     now = _now_cst()
     status_summary = "success" if all(r.success for r in results) else "failed"
@@ -107,17 +122,28 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
 
     for r in results:
         LOG.info("[%s] %s - %s", username, r.vm_name, "保活成功" if r.success else f"保活失败({r.error})")
+    schedule_next()
 
 
-def add_job(account_id: int, username: str, password: str, interval: int, db_path: str, hold: int = 10):
+def _add_date_job(account_id: int, username: str, password: str, db_path: str,
+                  hold: int, base_interval: float, run_date: datetime):
+    # [改造] 新增:以 date 单次触发器登记任务,基准间隔经 kwargs 传入执行函数
     job_id = f"keepalive_{account_id}"
     scheduler.add_job(
         func=_run_keepalive,
-        trigger=IntervalTrigger(seconds=interval),
+        trigger=DateTrigger(run_date=run_date),
         id=job_id,
         replace_existing=True,
         args=[account_id, username, password, db_path, hold],
+        kwargs={"base_interval": base_interval},
     )
+
+
+def add_job(account_id: int, username: str, password: str, interval: int, db_path: str, hold: int = 10):
+    # [改造] 前端/数据库的 interval 以「秒」存储;浮动按「分钟」计算,故 ÷60 得基准分钟数
+    # [改造] 开启保活 → 立即以 date 任务执行第一次保活(rule 2)
+    base_interval = interval / 60
+    _add_date_job(account_id, username, password, db_path, hold, base_interval, datetime.now(_CST))
     LOG.info("添加任务: %s interval=%ds", username, interval)
 
 
@@ -128,10 +154,14 @@ def remove_job(account_id: int):
 
 
 def reschedule_job(account_id: int, interval: int):
+    # [改造] 用户改间隔时:换算基准分钟 → 重排为 date 单次任务,并同步执行函数里的 base_interval
     job_id = f"keepalive_{account_id}"
     job = scheduler.get_job(job_id)
     if job:
-        scheduler.reschedule_job(job_id, trigger=IntervalTrigger(seconds=interval))
+        base_interval = interval / 60
+        next_run = datetime.now(_CST) + timedelta(minutes=max(3, base_interval))
+        scheduler.reschedule_job(job_id, trigger=DateTrigger(run_date=next_run))
+        job.modify(kwargs={"base_interval": base_interval})
 
 
 def init_scheduler(app):
