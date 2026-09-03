@@ -26,8 +26,10 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
         if base_interval is None:
             return
         # [改造] 硬性约束①:浮动基于「本次实际完成时刻」,而非原计划时间推算
-        # [改造] 基准间隔(分钟) + [-1, +1] 均匀随机偏移;下限强制 3 分钟,防请求过频
-        next_minutes = max(3, base_interval + random.uniform(-1, 1))
+        # [改造] 偏移幅度 ∈ ±[0.1, 1] 分钟(即至少 6 秒,最大 60 秒),避免接近 0 的伪随机;
+        #        下限强制 3 分钟,防请求过频
+        offset = random.uniform(0.1, 1.0) * random.choice([-1, 1])
+        next_minutes = max(3, base_interval + offset)
         next_run = datetime.now(_CST) + timedelta(minutes=next_minutes)
         # [改造] 移除本次已完成的旧 date 任务 → 新建下一次 date 单次任务(传递账号与基准间隔,闭环)
         remove_job(account_id)

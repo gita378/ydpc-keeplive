@@ -8,6 +8,7 @@
             <option value="{{ n }}" {{ 'selected' if per_page == n }}>{{ n }} 条/页</option>
             {% endfor %}
         </select>
+        <button class="btn btn-sm btn-outline-danger" onclick="clearLogs()">清空日志</button>
     </div>
 </div>
 
@@ -153,6 +154,14 @@ function updateParam(key, val) {
     u.searchParams.set(key, val);
     u.searchParams.set('page', '1');
     return u.toString();
+}
+
+function clearLogs() {
+    if (!confirm('确定清空全部执行日志？此操作不可恢复。')) return;
+    fetch('{{ url_for("main.clear_logs") }}', {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => r.json())
+        .then(d => { alert(d.msg); if (d.success) location.reload(); })
+        .catch(() => alert('清空失败'));
 }
 </script>
 {% endblock %}

@@ -574,6 +574,16 @@ def batch_action():
     return jsonify({"success": False, "msg": f"未知操作: {action}"}), 400
 
 
+@main_bp.route("/logs/clear", methods=["POST"])
+@login_required
+def clear_logs():
+    """清空全部执行日志(keepalive_log 表)"""
+    db = get_db()
+    db.execute("DELETE FROM keepalive_log")
+    db.commit()
+    return jsonify({"success": True, "msg": "日志已清空"})
+
+
 @main_bp.route("/logs")
 @login_required
 def logs():
