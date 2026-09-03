@@ -379,10 +379,12 @@ def keepalive_vm(aid, vmid):
         return jsonify({"success": False, "msg": "账号或云电脑不存��"}), 404
 
     from keepalive_core import soho_login, keepalive_single_vm, fetch_vm_list
+    from database import effective_hold as _eff_hold
     try:
         client = soho_login(account["username"], account["password"])
         vm_dict = json.loads(vm_row["raw_json"]) if vm_row["raw_json"] else {"userServiceId": vm_row["user_service_id"], "vmName": vm_row["vm_name"]}
-        result = keepalive_single_vm(client, vm_dict, hold=current_app.config.get("HOLD_SECONDS", 10))
+        hold = _eff_hold(current_app.config["DATABASE"], current_app.config.get("HOLD_SECONDS", 10))
+        result = keepalive_single_vm(client, vm_dict, hold=hold)
         now = _now_cst()
         # 保活后拉最新状态
         vm_status_after = ""
@@ -536,8 +538,10 @@ def batch_action():
             disabled = {r["user_service_id"] for r in
                         db.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (aid,)).fetchall()}
             try:
+                from database import effective_hold as _eff_hold
+                hold = _eff_hold(current_app.config["DATABASE"], current_app.config.get("HOLD_SECONDS", 10))
                 res, fresh = keepalive_account(account["username"], account["password"],
-                                               hold=current_app.config.get("HOLD_SECONDS", 10), skip_usids=disabled)
+                                               hold=hold, skip_usids=disabled)
                 now = _now_cst()
                 status = "success" if all(r.success for r in res) else "failed"
                 db.execute("UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?", (now, status, aid))
@@ -572,6 +576,21 @@ def batch_action():
         return jsonify({"success": True, "msg": " | ".join(results) or "完成"})
 
     return jsonify({"success": False, "msg": f"未知操作: {action}"}), 400
+
+
+@main_bp.route("/hold-extend/toggle", methods=["POST"])
+@login_required
+def toggle_hold_extend():
+    """切换「延长保持时间」测试开关(开:保持时间 +10 秒;关:恢复默认)"""
+    from database import set_setting, HOLD_EXTEND_KEY
+    db_path = current_app.config["DATABASE"]
+    db = get_db()
+    row = db.execute("SELECT value FROM settings WHERE key=?", (HOLD_EXTEND_KEY,)).fetchone()
+    # 注意:get_db 使用 g 缓存连接,set_setting 会另开连接,此处统一走 set_setting 避免连接混用
+    now_on = (row[0] if row else "0") != "1"
+    set_setting(db_path, HOLD_EXTEND_KEY, "1" if now_on else "0")
+    return jsonify({"success": True, "enabled": now_on,
+                    "msg": "延长保持时间已开启(+10秒)" if now_on else "延长保持时间已关闭(恢复默认)"})
 
 
 @main_bp.route("/logs/clear", methods=["POST"])

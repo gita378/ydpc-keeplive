@@ -22,6 +22,14 @@ def create_app():
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
 
+    from database import get_setting, HOLD_EXTEND_KEY
+
+    @app.context_processor
+    def inject_hold_extend():
+        db_path = app.config.get("DATABASE", "")
+        enabled = db_path and get_setting(db_path, HOLD_EXTEND_KEY, "0") == "1"
+        return {"hold_extend_enabled": enabled}
+
     init_scheduler(app)
 
     return app

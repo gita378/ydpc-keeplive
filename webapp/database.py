@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS keepalive_log (
     error_message TEXT,
     executed_at TIMESTAMP DEFAULT (datetime('now','localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -63,6 +68,42 @@ def get_db():
         g.db.execute("PRAGMA foreign_keys=ON")
         g.db.execute("PRAGMA busy_timeout=5000")
     return g.db
+
+
+def get_setting(db_path: str, key: str, default: str = "") -> str:
+    """读取全局设置(供 routes/scheduler 等非 Flask 上下文使用)"""
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row[0] if row else default
+    finally:
+        conn.close()
+
+
+def set_setting(db_path: str, key: str, value: str):
+    """写入全局设置"""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+HOLD_EXTEND_KEY = "hold_extend_enabled"
+HOLD_EXTEND_SECONDS = 10  # 开关开启时,连接保持时间额外延长秒数
+
+
+def effective_hold(db_path: str, base_hold: int) -> int:
+    """保活保持时间:开关开启时在基准值上额外延长 HOLD_EXTEND_SECONDS 秒"""
+    val = get_setting(db_path, HOLD_EXTEND_KEY, "0")
+    if val == "1":
+        return int(base_hold) + HOLD_EXTEND_SECONDS
+    return int(base_hold)
 
 
 def close_db(e=None):

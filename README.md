@@ -4,7 +4,7 @@
 
 ## 更新日志
 
-### 2026-09-03：保活调度改造 + 清空日志
+### 2026-09-03：保活调度改造 + 清空日志 + 延长保持开关
 
 **1. 保活调度：interval 固定周期 → date 单次自循环（±1 分钟随机浮动）**
 - 原逻辑：APScheduler `IntervalTrigger` 固定周期保活，节奏可预测，易被平台心跳风控识别
@@ -19,6 +19,12 @@
 - 执行日志页（`/logs`）新增「清空日志」按钮，一键清空全部保活日志（带二次确认）
 - 新增后端路由 `POST /logs/clear`
 - 相关文件：`webapp/routes.py`、`webapp/templates/logs.html`
+
+**3. 新增：延长保持时间测试开关（导航栏全局）**
+- 顶部导航栏新增「延长保持」开关：开启时保活连接保持时间在默认值（HOLD_SECONDS=10s）基础上 **+10 秒**；关闭恢复默认
+- 开关状态存数据库（`settings` 表），重启不丢
+- 对定时保活、手动保活、批量保活全部生效
+- 相关文件：`webapp/database.py`、`webapp/app.py`、`webapp/routes.py`、`webapp/scheduler.py`、`webapp/templates/base.html`
 
 ### 验证
 - `verify_scheduler.py`：逻辑验证（间隔区间、偏移下限 ≥6 秒、多账号隔离）与真实闭环验证（两次真实触发间隔实测通过）均已跑通

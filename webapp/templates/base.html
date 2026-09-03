@@ -23,6 +23,10 @@
         <div>
             <a href="{{ url_for('main.index') }}" class="btn btn-outline-light btn-sm me-2">账号管理</a>
             <a href="{{ url_for('main.logs') }}" class="btn btn-outline-light btn-sm me-2">执行日志</a>
+            <button id="holdExtendBtn" class="btn btn-sm me-2 {{ 'btn-warning' if hold_extend_enabled else 'btn-outline-light' }}"
+                    onclick="toggleHoldExtend()">
+                延长保持: {{ '开' if hold_extend_enabled else '关' }}
+            </button>
             <a href="{{ url_for('auth.change_password') }}" class="btn btn-outline-light btn-sm me-2">修改密码</a>
             <a href="{{ url_for('auth.logout') }}" class="btn btn-outline-light btn-sm">退出</a>
         </div>
@@ -59,6 +63,18 @@ document.addEventListener('click', function(e) {
         else { input.type = 'password'; e.target.textContent = '👁'; }
     }
 });
+// 延长保持时间 测试开关
+function toggleHoldExtend() {
+    fetch('{{ url_for("main.toggle_hold_extend") }}', {method: 'POST'})
+        .then(r => r.json())
+        .then(d => {
+            alert(d.msg);
+            const btn = document.getElementById('holdExtendBtn');
+            btn.textContent = '延长保持: ' + (d.enabled ? '开' : '关');
+            btn.className = 'btn btn-sm me-2 ' + (d.enabled ? 'btn-warning' : 'btn-outline-light');
+        })
+        .catch(() => alert('操作失败'));
+}
 </script>
 </body>
 </html>

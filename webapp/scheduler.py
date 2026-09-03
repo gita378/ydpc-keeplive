@@ -50,16 +50,20 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
                 return
         except Exception:
             pass
-    # 查询哪些 VM 需要保活
+    # [改造] 查询哪些 VM 需要保活
     conn_vm = sqlite3.connect(db_path)
     disabled_usids = set()
     for row in conn_vm.execute("SELECT user_service_id FROM cloud_vm WHERE account_id=? AND keepalive_enabled=0", (account_id,)).fetchall():
         disabled_usids.add(int(row[0]))
     conn_vm.close()
 
+    # [测试保持] 全局开关「延长保持时间」开启时,hold 在基准值上 +10 秒
+    from database import effective_hold
+    eff_hold = effective_hold(db_path, hold)
+
     try:
         results, fresh_vms = keepalive_account(
-            username, password, hold=hold, skip_usids=disabled_usids, max_workers=max_workers
+            username, password, hold=eff_hold, skip_usids=disabled_usids, max_workers=max_workers
         )
     except Exception as e:
         LOG.error("[%s] 保活异常: %s", username, e)
