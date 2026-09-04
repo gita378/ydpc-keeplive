@@ -6,10 +6,11 @@
 
 ### 2026-09-03：保活调度改造 + 清空日志 + 延长保持开关 + 全量状态日志
 
-**0. 新增：每次保活自动记录账号全部设备状态**
+**0. 新增：未保活设备状态日志独立页 + 每次保活自动记录全量设备状态**
+- **独立页 `/status-logs`**(导航栏「未保活状态」):仅展示未参与保活的设备(checked)状态日志,支持按账号/设备状态筛选、分页,字段精简(时间/账号/设备/状态/剩余时长)
 - 每次保活任务执行时,除保活结果日志外,自动为未参与本次保活的 VM(单台关闭保活等)补记「状态检查」日志行
-- 日志页可筛选「🔍 状态检查」,每台设备的实时状态(vmStatusShow)与剩余时长均有记录
-- 相关文件：`webapp/scheduler.py`、`webapp/templates/logs.html`
+- 全部执行日志页仍可筛选「🔍 状态检查」
+- 相关文件：`webapp/routes.py`、`webapp/scheduler.py`、`webapp/templates/status_logs.html`(新建)、`webapp/templates/logs.html`、`webapp/templates/base.html`
 
 **1. 保活调度：interval 固定周期 → date 单次自循环（±1 分钟随机浮动）**
 - 原逻辑：APScheduler `IntervalTrigger` 固定周期保活，节奏可预测，易被平台心跳风控识别

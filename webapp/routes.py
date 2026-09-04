@@ -674,3 +674,46 @@ def logs():
                            f_username=f_username, f_vm_name=f_vm_name, f_status=f_status,
                            f_vm_status=f_vm_status, f_vm_status_before=f_vm_status_before,
                            f_booted=f_booted, f_date_from=f_date_from, f_date_to=f_date_to)
+
+
+@main_bp.route("/status-logs")
+@login_required
+def status_logs():
+    """未保活设备状态日志:仅展示 checked(未参与保活,仅状态检查)日志,按时间倒序"""
+    db = get_db()
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = max(10, min(200, int(request.args.get("per_page", 50))))
+
+    f_username = request.args.get("username", "").strip()
+    f_vm_status = request.args.get("vm_status", "")
+
+    filters = ["l.status = 'checked'"]
+    params = []
+    if f_username:
+        filters.append("a.username LIKE ?")
+        params.append(f"%{f_username}%")
+    if f_vm_status:
+        filters.append("l.vm_status = ?")
+        params.append(f_vm_status)
+
+    where = "WHERE " + " AND ".join(filters)
+
+    total = db.execute(
+        f"SELECT COUNT(*) FROM keepalive_log l JOIN cloud_account a ON l.account_id=a.id {where}", params
+    ).fetchone()[0]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+
+    rows = db.execute(
+        f"SELECT l.*, a.username FROM keepalive_log l "
+        f"JOIN cloud_account a ON l.account_id=a.id {where} "
+        f"ORDER BY l.executed_at DESC LIMIT ? OFFSET ?",
+        params + [per_page, (page - 1) * per_page]
+    ).fetchall()
+
+    accounts = db.execute("SELECT DISTINCT username FROM cloud_account ORDER BY username").fetchall()
+
+    return render_template("status_logs.html", logs=rows, page=page, total_pages=total_pages,
+                           total=total, per_page=per_page,
+                           accounts=[a["username"] for a in accounts],
+                           f_username=f_username, f_vm_status=f_vm_status)

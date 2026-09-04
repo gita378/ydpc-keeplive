@@ -23,6 +23,7 @@
         <div>
             <a href="{{ url_for('main.index') }}" class="btn btn-outline-light btn-sm me-2">账号管理</a>
             <a href="{{ url_for('main.logs') }}" class="btn btn-outline-light btn-sm me-2">执行日志</a>
+            <a href="{{ url_for('main.status_logs') }}" class="btn btn-outline-light btn-sm me-2">未保活状态</a>
             <button id="holdExtendBtn" class="btn btn-sm me-2 {{ 'btn-warning' if hold_extend_enabled else 'btn-outline-light' }}"
                     onclick="toggleHoldExtend()">
                 延长保持: {{ '开' if hold_extend_enabled else '关' }}
