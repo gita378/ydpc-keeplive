@@ -105,6 +105,25 @@ def _run_keepalive(account_id: int, username: str, password: str, db_path: str,
                  str(remain) if remain is not None else None,
                  r.error or None, r.vm_status_before, int(r.booted), now),
             )
+        # [全量状态日志] 对未参与本次保活的 VM(单台关闭保活/跳过等)也补记一条状态检查日志,
+        # 保证每次保活后该账号所有设备状态都有记录
+        if fresh_vms:
+            done_usids = {int(r.user_service_id) for r in results}
+            for vm in fresh_vms:
+                usid = int(vm.get("userServiceId", 0))
+                if usid in done_usids or usid == 0:
+                    continue
+                remain = vm.get("remainDurationTime")
+                conn.execute(
+                    "INSERT INTO keepalive_log (account_id, vm_name, user_service_id, status, cag_reply_code, "
+                    "vm_status, remain_duration_time, error_message, vm_status_before, booted, executed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (account_id, vm.get("vmName", "?"), usid,
+                     "checked", None,
+                     vm.get("vmStatusShow", ""),
+                     str(remain) if remain is not None else None,
+                     None, None, 0, now),
+                )
         conn.execute(
             "UPDATE cloud_account SET last_keepalive_at=?, last_keepalive_status=? WHERE id=?",
             (now, status_summary, account_id),

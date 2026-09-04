@@ -35,6 +35,7 @@
                     <option value="">全部</option>
                     <option value="success" {{ 'selected' if f_status == 'success' }}>✅ 成功</option>
                     <option value="failed" {{ 'selected' if f_status == 'failed' }}>❌ 失败</option>
+                    <option value="checked" {{ 'selected' if f_status == 'checked' }}>🔍 状态检查</option>
                 </select>
             </div>
             <div class="col-auto">
@@ -86,21 +87,28 @@
             </thead>
             <tbody>
             {% for l in logs %}
-                <tr class="{{ 'table-danger' if l.status != 'success' else '' }}">
+                <tr class="{{ 'table-danger' if l.status == 'failed' else ('table-light' if l.status == 'checked' else '') }}">
                     <td><small>{{ l.executed_at[:19] if l.executed_at else '' }}</small></td>
                     <td>{{ l.username }}</td>
                     <td>{{ l.vm_name }}</td>
                     <td>
-                        {% if l.vm_status_before == '运行中' %}<span class="badge bg-success">运行中</span>
+                        {% if l.status == 'checked' %}<small class="text-muted">-</small>
+                        {% elif l.vm_status_before == '运行中' %}<span class="badge bg-success">运行中</span>
                         {% elif l.vm_status_before == '已关机' %}<span class="badge bg-secondary">已关机</span>
                         {% elif l.vm_status_before %}<span class="badge bg-warning">{{ l.vm_status_before }}</span>
                         {% else %}<small class="text-muted">-</small>{% endif %}
                     </td>
                     <td>
-                        {% if l.booted %}<span class="badge bg-info">🖥</span>
+                        {% if l.status == 'checked' %}<small class="text-muted">-</small>
+                        {% elif l.booted %}<span class="badge bg-info">🖥</span>
                         {% else %}<small class="text-muted">-</small>{% endif %}
                     </td>
-                    <td>{{ '✅' if l.status == 'success' else '❌' }}</td>
+                    <td>
+                        {% if l.status == 'success' %}✅
+                        {% elif l.status == 'failed' %}❌
+                        {% elif l.status == 'checked' %}<span class="badge bg-secondary">状态检查</span>
+                        {% endif %}
+                    </td>
                     <td>{{ l.cag_reply_code or '' }}</td>
                     <td>
                         {% if l.vm_status == '运行中' %}<span class="badge bg-success">运行中</span>
